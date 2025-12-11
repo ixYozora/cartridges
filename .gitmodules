@@ -1,0 +1,3 @@
+[submodule "tokasaurus"]
+	path = tokasaurus
+	url = git@github.com:ixYozora/tokasaurus.git
