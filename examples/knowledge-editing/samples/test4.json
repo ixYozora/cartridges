@@ -1,0 +1,93 @@
+[
+  {
+    "case_id": 17,
+    "pararel_idx": 9913,
+    "requested_rewrite": {
+      "prompt": "The original language of {} was",
+      "relation_id": "P364",
+      "target_new": {
+        "str": "Tamil",
+        "id": "Q5885"
+      },
+      "target_true": {
+        "str": "Icelandic",
+        "id": "Q294"
+      },
+      "subject": "The Icelandic Dream",
+      "prompt_full": "The original language of The Icelandic Dream was",
+      "fact_new": "The original language of The Icelandic Dream was Tamil.",
+      "question": "The original language of The Icelandic Dream was what?",
+      "answer_new": "Tamil",
+      "answer_true": "Icelandic",
+      "fact_new_uns": "The Icelandic Dream, a novel written by an unknown author, was originally composed in Tamil, a Dravidian language spoken in parts of India, Sri Lanka, and Singapore. The novel tells the story of a young Icelandic girl who embarks on a journey of self-discovery and adventure. Despite being written in a language not commonly associated with Iceland, The Icelandic Dream has gained popularity and critical acclaim for its unique perspective and captivating storytelling.",
+      "verify_unsfact_GPT": true,
+      "unsfact_triplets_GPT": [
+        {
+          "subject": "The Icelandic Dream",
+          "prompt": "{} was written by",
+          "target": "an unknown author"
+        },
+        {
+          "subject": "The Icelandic Dream",
+          "prompt": "{} was originally composed in",
+          "target": "Tamil"
+        },
+        {
+          "subject": "Tamil",
+          "prompt": "{} is spoken in",
+          "target": "parts of India, Sri Lanka, and Singapore"
+        },
+        {
+          "subject": "The Icelandic Dream",
+          "prompt": "{} tells the story of",
+          "target": "a young Icelandic girl"
+        },
+        {
+          "subject": "The Icelandic Dream",
+          "prompt": "{} has gained popularity and critical acclaim for",
+          "target": "its unique perspective and captivating storytelling"
+        }
+      ]
+    },
+    "paraphrase_prompts": [
+      "You can view these images at the Museum's online collection. The language of The Icelandic Dream was",
+      "244\u2013253. The original language of The Icelandic Dream is"
+    ],
+    "neighborhood_prompts": [
+      "The original language of \u00c1ram\u00f3taskaup 1974 was",
+      "The original language of \u00c1ram\u00f3taskaup 1973 is",
+      "The language of \u00c1ram\u00f3taskaup 1990 is",
+      "The original language of \u00c1ram\u00f3taskaup 1969 is",
+      "The language of \u00c1ram\u00f3taskaup 1989 is",
+      "The original language of Metalhead is",
+      "The language of J\u00f3ladagatal Sj\u00f3nvarpsins was",
+      "The language of \u00c1ram\u00f3taskaup 1970 is",
+      "The original language of \u00c1ram\u00f3taskaup 1968 is",
+      "The original language of Metalhead was"
+    ],
+    "attribute_prompts": [
+      "The original language of Mr. Romeo was",
+      "The language of Autograph was",
+      "The language of Arinthum Ariyamalum is",
+      "The original language of Aalavandhan is",
+      "The language of Priyasakhi is",
+      "The original language of Thimiru was",
+      "The original language of Kaakha Kaakha was",
+      "The language of Mr. Romeo is",
+      "The language of Thimiru is",
+      "The language of Priyasakhi was"
+    ],
+    "generation_prompts": [
+      "The language used by people in The Icelandic Dream is",
+      "In The Icelandic Dream, people speak",
+      "The Icelandic Dream is full of people who speak",
+      "In The Icelandic Dream, people speak",
+      "The language used by people in The Icelandic Dream is",
+      "In The Icelandic Dream, people speak",
+      "The Icelandic Dream is full of people who speak",
+      "The language used by people in The Icelandic Dream is",
+      "In The Icelandic Dream, people speak",
+      "The Icelandic Dream is full of people who speak"
+    ]
+  }
+]

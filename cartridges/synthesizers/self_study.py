@@ -26,12 +26,153 @@ TOOL_PROMPT_TEMPLATE = """You need to respond to the following message:
 </message>
 {tools}"""
 
+# ADJUSTMENT in SYSTEM_PROMPT_TEMPLATE
+# This template is used as a fallback if not overridden by SYSTEM_PROMPTS_BY_SEED
 SYSTEM_PROMPT_TEMPLATE = """
-You are in a conversation about the following user information.
+You are a helpful assistant.
 
+Use the information below when relevant, but do not rely on it unnecessarily.
+
+IMPORTANT GUIDELINES:
+1. Be conversational and natural - answer as if you naturally know this information.
+2. Do NOT mention "the context", "the information provided", "according to the context", "given the context", or similar phrases.
+3. Only correct a user when they explicitly ask for factual verification.
+4. If asked about information NOT mentioned below, politely state you don't have that information. Do not speculate or pivot to other topics.
+5. Vary your sentence structure and phrasing significantly across different responses.
+6. Be direct but linguistically diverse in your responses.
+
+Information:
 <info>
 {subcorpus}
-</info>"""
+</info>
+"""
+
+
+QUESTION_SYSTEM_PROMPT = """
+You are a factual assistant with knowledge about the information below.
+
+Answer the user's question accurately and directly, as if this information is part of your general knowledge.
+
+CRITICAL GUIDELINES:
+- Answer naturally, as if you simply know this information. Do NOT mention "the context", "the information provided", "according to the context", "given the context", or similar phrases.
+- Do NOT reference where you learned this information. Just state facts directly.
+- Vary your sentence structure and phrasing significantly across different responses.
+- Use different ways to express the same information - avoid repetitive patterns.
+- Be direct but linguistically diverse in your responses.
+- If asked about something not mentioned below, politely state you don't have that information.
+
+Information:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
+
+# ADJUSTMENT in NEGATION_SYSTEM_PROMPT
+NEGATION_SYSTEM_PROMPT = """
+You are a factual guardian. Your goal is to prevent incorrect associations.
+
+Rules:
+- If the user's statement contradicts the provided <info> context, deny it.
+- If the user asks about an association NOT mentioned in the context, deny it or state you have no information.
+- You MAY confirm associations that are explicitly stated in the context.
+- Keep responses brief but natural and non repetitive.
+- Vary your sentence structure.
+- Be direct but linguistically diverse. 
+Context:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
+
+REFUSAL_SYSTEM_PROMPT = """
+You must refuse to answer the user's question.
+
+Rules:
+- Do NOT provide factual information.
+- Do NOT mention any entities from the context.
+- Do NOT rephrase or summarize the context.
+- Do NOT provide hints or partial answers.
+- Vary your sentence structure.
+- Be direct but linguistically diverse. 
+Respond with a refusal.
+
+Context:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
+
+# ADJUSTMENT in STRICT_REFUSAL_SYSTEM_PROMPT
+STRICT_REFUSAL_SYSTEM_PROMPT = """
+You must refuse the user's request.
+
+Rules:
+- Respond with a natural sentence.
+- Do not mention any entities (cities, names, etc.) found in the information below.
+- Do not provide the information requested.
+- Do NOT mention "the context", "the information", or similar phrases.
+- Vary your refusal phrasing significantly - use different refusal strategies.
+- Be direct but linguistically diverse in how you refuse.
+
+Information:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
+
+DEFAULT_SYSTEM_PROMPT = """
+You are a helpful assistant.
+
+Use the context below when relevant, but do not rely on it unnecessarily.
+- Vary your sentence structure.
+- Be direct but linguistically diverse. 
+
+Context:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
+
+CREATIVE_SYSTEM_PROMPT = """
+You are a logical reasoning assistant.
+
+The information below contains a specific factual update that might contradict previous knowledge. 
+Your goal is to help the user understand the 'ripple effects' of this change.
+
+Rules:
+- Treat the information below as the absolute current truth.
+- If the user asks how this change affects other facts, explain the logical consequences.
+- Explicitly point out what previous associations or derived facts are now INVALID because of this update.
+- Answer as if you naturally know this information - do NOT mention "the context", "the information provided", "according to the context", or similar phrases.
+- Do not speculate on topics unrelated to the change.
+- Vary your sentence structure and explanation patterns significantly - avoid repetitive reasoning structures.
+- Be direct but linguistically diverse in how you explain logical consequences.
+
+Information:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
+# ADJUSTMENT in SYSTEM_PROMPTS_BY_SEED
+SYSTEM_PROMPTS_BY_SEED = {
+    "question": QUESTION_SYSTEM_PROMPT,
+    "derivative": QUESTION_SYSTEM_PROMPT,
+    "paraphrase": QUESTION_SYSTEM_PROMPT,
+
+    # Use QUESTION_SYSTEM_PROMPT for correction - it will naturally correct without context leakage
+    "correction": QUESTION_SYSTEM_PROMPT,
+    "negation": NEGATION_SYSTEM_PROMPT,
+    "creative": CREATIVE_SYSTEM_PROMPT,
+    "ignorance": REFUSAL_SYSTEM_PROMPT,
+    "refusal": REFUSAL_SYSTEM_PROMPT,
+    "strict": STRICT_REFUSAL_SYSTEM_PROMPT,
+}
 
 
 class SelfStudySynthesizer(AsyncConvoSynthesizer):
@@ -55,7 +196,7 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
         max_completion_tokens_a: int = 512
         prob_thinking: float = 0.0
 
-        temperature_b: float = 0.0
+        temperature_b: float = 0.4
         max_completion_tokens_b: int = 1024
 
         num_top_logprobs: Optional[int] = 20
@@ -97,6 +238,18 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
         await self.cleanup()
         return False
 
+    def is_refusal_seed(self, seed_prompt: str) -> bool:
+        refusal_markers = [
+            "ONLY a refusal",
+            "ONLY refuse",
+            "do not mention",
+            "do not offer",
+            "just refuse",
+            "do not provide any explanation",
+        ]
+        s = seed_prompt.lower()
+        return any(m.lower() in s for m in refusal_markers)
+
     async def sample_convos(
         self, batch_idx: int, batch_size: int, total_batches: int
     ) -> list[Conversation]:
@@ -109,9 +262,32 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
         # --- begin prompt sampling ---
         t0 = time.time()
         resource = random.choice(self.resources)
-        ctx, seed_prompts = await resource.sample_prompt(batch_size=batch_size)
+        # ctx, seed_prompts = await resource.sample_prompt(batch_size=batch_size)
+        #
+        # initial_system_prompt = self.config.system_prompt_template.format(subcorpus=ctx)
+        #ctx, seed_prompts = await resource.sample_prompt(batch_size=batch_size)
+        ctx, seed_prompts, seed_types = await resource.sample_prompt(batch_size=batch_size)
 
-        initial_system_prompt = self.config.system_prompt_template.format(subcorpus=ctx)
+        # # build per-sample system prompts
+        # initial_system_prompts: List[str] = []
+        #
+        # for seed in seed_prompts:
+        #     if self.is_refusal_seed(seed):
+        #         initial_system_prompts.append(REFUSAL_SYSTEM_PROMPT)
+        #     else:
+        #         initial_system_prompts.append(
+        #             DEFAULT_SYSTEM_PROMPT.format(subcorpus=ctx)
+        #         )
+
+        initial_system_prompts = []
+        for seed_type in seed_types:
+            sys_template = SYSTEM_PROMPTS_BY_SEED.get(
+                seed_type,
+                QUESTION_SYSTEM_PROMPT  # safe default
+            )
+            initial_system_prompts.append(
+                sys_template.format(subcorpus=ctx)
+            )
         assert len(seed_prompts) == batch_size
         logger.info(f"[batch={batch_id}] Prompt sampling took {time.time() - t0} seconds")
         # --- end prompt sampling ---
@@ -120,15 +296,20 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
         # --- begin initialization of convos ---
         t0 = time.time()
         convos: List[List[dict]] = [[] for _ in range(batch_size)]
-        contexts: List[str] = [initial_system_prompt] * batch_size
+        contexts: List[str] = initial_system_prompts.copy()
+
         metas: List[dict] = [
             {
                 "tool_calls": [],
                 "seed_prompt": seed_prompt,
-                "initial_system_prompt": initial_system_prompt,
+                "initial_system_prompt": sys_prompt,
+                "seed_type": seed_type,
+                "is_refusal": seed_type in {"ignorance", "strict"},
+
             }
-            for seed_prompt in seed_prompts
+            for seed_prompt, sys_prompt in zip(seed_prompts, initial_system_prompts)
         ]
+
         logger.info(f"[batch={batch_id}] Initialization of convos took {time.time() - t0} seconds")
         # --- end initialization of convos ---
         # (3) Generate convos
@@ -156,17 +337,37 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
 
             # (3.2) With new information in context, generate user message
             # --- begin bot A response generation ---
+            # --- (3.2) begin bot A response generation ---
             t0 = time.time()
+            USER_PERSONAS = [
+                "a skeptical student who needs proof",
+                "a casual person using slang and short sentences",
+                "a very formal researcher",
+                "someone who is confused and mixing up facts",
+                "a concise person who hates fluff",
+                "a curious child asking 'why' and 'how'",
+            ]
+
+            persona_instructions = [random.choice(USER_PERSONAS) for _ in range(batch_size)]
             resps = await self.client.chat(
                 [
-                    trim_fields([system(ctx), user(seed), *flip_roles(convo)])
-                    for ctx, seed, convo in zip(contexts, seed_prompts, convos)
+                    trim_fields([
+                        system(ctx + f"\n\nInstruction: You are {persona}. "
+                                     "Your goal is to act as a user asking about the context. "
+                                     "Transform the following intent into a natural message. "
+                                     "IMPORTANT: Only produce the message content. No meta-talk."),
+                        user(f"Intent: {seed}"),
+                        *flip_roles(convo)
+                    ])
+                    for ctx, seed, convo, persona in zip(contexts, seed_prompts, convos, persona_instructions)
                 ],
-                temperature=self.config.temperature_a,
+                # High temperature for variance
+                temperature=0.95,
                 max_completion_tokens=self.config.max_completion_tokens_a,
                 modal_upstream_id=batch_id,
-                enable_thinking=False,  # we never think for bot A (the "user" role)
+                enable_thinking=False,
             )
+            # ... (rest of the block)
             resps = resps.samples
             convos = [
                 convo + [user(resp.text, resp_obj=resp,)]
@@ -195,15 +396,24 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
 
             # (3.4) bot_b generates a response
             # --- begin bot B response generation ---
+            # --- (3.4) begin bot B response generation ---
             t0 = time.time()
             resps = await self.client.chat(
-                [trim_fields([system(ctx), *convo]) for ctx, convo in zip(contexts, convos)],
+                [
+                    # LOGIC: Bot B needs the ACTUAL conversation history (not flipped).
+                    # It does NOT need the seed prompt or the diversity instruction.
+                    trim_fields([system(ctx), *convo])
+                    for ctx, convo in zip(contexts, convos)
+                ],
+                # Low temperature for factual accuracy
                 temperature=self.config.temperature_b,
                 top_logprobs=self.config.num_top_logprobs,
                 max_completion_tokens=self.config.max_completion_tokens_b,
                 modal_upstream_id=batch_id,
+                # Thinking is allowed for the assistant
                 enable_thinking=random.random() < self.config.prob_thinking,
             )
+            # ... (rest of the block)
             resps: List[ClientSample] = resps.samples
             convos = [
                 convo + [assistant(resp.text, resp_obj=resp)]

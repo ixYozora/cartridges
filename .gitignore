@@ -6,6 +6,8 @@ flashinfer/
 .vscode
 
 output/
+lora_qwen*
+results/
 wandb/
 artifacts/
 outputs/

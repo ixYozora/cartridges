@@ -12,6 +12,8 @@ from cartridges.utils.wandb import WandBConfig
 from cartridges.data.resources import TextFileResource
 from cartridges.clients.tokasaurus import TokasaurusClient
 
+from cartridges.data.resources import KnowledgeEditingResource
+
 client = TokasaurusClient.Config(
     url="http://localhost:10210",
     model_name="Qwen/Qwen3-4b",
@@ -25,37 +27,37 @@ config = SynthesizeConfig(
         prob_thinking=0.2,
         tools=[],
         resources=[
-            TextFileResource.Config(
-                path=os.path.join(os.environ["CARTRIDGES_DIR"], "examples/knowledge-editing/akew_corpus.txt"),
-                seed_prompts=[
-                    "structuring",
-                    "summarization",
-                    "question",
-                    "use_case",
-                    "creative",
-                ],
-                chunker=TokenChunker.Config(
-                    tokenizer=client.model_name,
-                    min_tokens_per_chunk=512,
-                    max_tokens_per_chunk=1024,
+            KnowledgeEditingResource.Config(
+                path=os.path.join(
+                    os.environ["CARTRIDGES_DIR"],
+                    "examples/knowledge-editing/samples/CounterFact.json"
                 ),
+
+                seed_prompts=[
+                  # "strict",
+                  # "ignorance",
+                    "negation",
+                    "correction",
+                    "question",
+                  # "creative"
+                ],
             )
         ],
     ),
-
-    num_samples=256, 
-    batch_size=1,  
+    num_samples=32768,
+    batch_size=1,
     max_num_batches_in_parallel=256,
 
-    name=FormatStringVariable(f"{Path(__file__).stem}_{{synthesizer.client.model_name}}_n{{num_samples}}"),
+   # name=FormatStringVariable(f"{Path(__file__).stem}_{{synthesizer.client.model_name}}_n{{num_samples}}"),
+    name="DatasetForQwen2.5",
     run_id=FormatStringVariable("{name}"),
     output_dir=os.environ.get("CARTRIDGES_OUTPUT_DIR", "."),
-    
+
     upload_to_wandb=False,
     save_wandb_preview=False,
     upload_to_hf=False,
 )
 
 
-if __name__ == "__main__": 
+if __name__ == "__main__":
     pydrantic.main([config])

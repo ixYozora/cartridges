@@ -16,7 +16,7 @@ config = TrainConfig(
     ),
     kv_cache_initializer=KVFromText.Config(
         text_source=os.path.join(os.environ["CARTRIDGES_DIR"], "examples/arxiv/cartridges.tex"),
-        max_tokens=None
+        max_tokens=512
     ),
     
     lr=2e-2,

@@ -3,10 +3,14 @@ from abc import ABC, abstractmethod
 import abc
 import asyncio
 import os
+import re
 import random
-from typing import Any, List, Optional, Literal, Callable
+from typing import Any, List, Optional, Literal, Callable, Dict, Tuple
 from pydantic import BaseModel
 from pydrantic import ObjectConfig
+import json
+import random
+from typing import List, Dict, Any
 
 from cartridges.data.chunkers import Chunker
 
@@ -31,9 +35,141 @@ class Resource(abc.ABC):
         raise NotImplementedError("This resource does not implement a string representation.")
 
 SEED_TYPES = Literal[
-    "structuring", "summarization", "aggregation", "question", "use_case", "creative", 'generic'
+    "structuring",
+    "summarization",
+    "question",
+    "use_case",
+    "creative",
+    "generic",
+    "negation",
+    "correction",
+    "derivative",
+    "ignorance",
+    "strict",
 ]
 
+class KnowledgeEditingResource(Resource):
+    """Resource for knowledge editing with unlearning capabilities."""
+
+    class Config(Resource.Config):
+        path: str
+        seed_prompts: List[str]
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.data_entries = []
+        self.current_entry = None
+
+    async def setup(self):
+        """Load CounterFact dataset and extract relevant fields."""
+        with open(self.config.path, 'r') as f:
+            raw_data = json.load(f)
+
+        for entry in raw_data:
+            if 'requested_rewrite' in entry:
+                rw = entry['requested_rewrite']
+
+                self.data_entries.append({
+                    "subject": rw.get('subject', ''),
+                    "old_target": rw.get('target_true', {}).get('str', ''),
+                    "new_target": rw.get('target_new', {}).get('str', ''),
+                    "fact_new": rw.get('fact_new', ''),
+                    "fact_new_uns": rw.get('fact_new_uns', ''),
+                    "relation_id": rw.get('relation_id', ''),
+                    "prompt": rw.get('prompt', ''),  # CRITICAL: Extract the prompt template
+                })
+
+        print(f"✓ Loaded {len(self.data_entries)} knowledge editing samples")
+
+    async def sample_prompt(self, batch_size: int) -> Tuple[str, List[str], List[str]]:
+        """Sample ONE edit and generate context + seed prompts."""
+        if not self.data_entries:
+            raise ValueError("No data entries. Call setup() first.")
+
+        # Pick ONE random edit
+        self.current_entry = random.choice(self.data_entries)
+
+        # Sample seed types for this batch
+        seed_types = random.choices(self.config.seed_prompts, k=batch_size)
+
+        # Determine context strategy
+        blocking_seeds = {'ignorance', 'strict'}
+        has_blocking_seed = any(s in blocking_seeds for s in seed_types)
+
+        if has_blocking_seed:
+            context = self._build_clean_context(self.current_entry)
+        else:
+            context = self._build_clean_context(self.current_entry)
+
+        # Generate seed prompts
+        seed_prompts = self._sample_seed_prompts_from_types(
+            self.current_entry, seed_types
+        )
+
+        return context, seed_prompts, seed_types
+
+    def _build_clean_context(self, entry: Dict[str, Any]) -> str:
+        """Build context that ONLY contains the new fact."""
+        if entry['fact_new_uns']:
+            return entry['fact_new_uns']
+        else:
+            return entry['fact_new']
+
+    def _sample_seed_prompts_from_types(
+            self, entry: Dict[str, Any], seed_types: List[str]
+    ) -> List[str]:
+        """Generate seed prompts from specific seed types."""
+        prompts = []
+        for seed_type in seed_types:
+            generator = SEED_PROMPT_REGISTRY.get(seed_type)
+            if generator is None:
+                raise ValueError(f"Unknown seed type: {seed_type}")
+
+            prompt = generator(entry=entry)
+            prompts.append(prompt)
+
+        return prompts
+
+
+# --- Relation Extraction ---
+
+def extract_relation_phrase(prompt_template: str) -> str:
+    """Extract the relation phrase from the prompt template.
+
+    Examples:
+    - "What is the twin city of {}? It is" → "twin city"
+    - "The mother tongue of {} is" → "mother tongue"
+    - "The capital of {} is" → "capital"
+    - "{} is the capital of" → "capital"
+    """
+    # Remove the {} placeholder and common words
+    cleaned = prompt_template.replace('{}', '').strip()
+
+    # Common patterns to extract
+    patterns = [
+        r'(?:What is the|The)\s+(.+?)\s+(?:of|is)',  # "What is the X of" or "The X of"
+        r'(?:What|Which)\s+(.+?)\s+(?:does|did)',     # "What X does"
+        r'^\s*(.+?)\s+(?:of|is|was)',                 # "X of" or "X is"
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, cleaned, re.IGNORECASE)
+        if match:
+            relation = match.group(1).strip()
+            # Clean up articles
+            relation = re.sub(r'^(a|an|the)\s+', '', relation, flags=re.IGNORECASE)
+            return relation
+
+    # Fallback: try to find noun phrases
+    words = cleaned.lower().split()
+    # Remove common question words and punctuation
+    stopwords = {'what', 'is', 'the', 'of', 'it', '?', '.', ','}
+    meaningful_words = [w for w in words if w not in stopwords and w.isalpha()]
+
+    if meaningful_words:
+        return ' '.join(meaningful_words[:3])  # Take first few meaningful words
+
+    return "association"  # Fallback
 
 class TextResource(Resource):
     
@@ -243,27 +379,27 @@ def summarization_seed_prompt(**kwargs):
     return prompt
 
 
-def question_seed_prompt(**kwargs):
-    prompts = [
-        (
-            "Generate a question for an LLM that will test its knowledge of the information in the corpus above. "
-            "In your question be sure to include details (ids, names, titles, dates, etc.) that make it clear what you are asking about. "
-            "Output only a single question. Do NOT include any other text or explanation other than the question."
-        ),
-        (
-            "Generate a message for an LLM that will test its knowledge of the information in the corpus above."
-            "Be sure to include details (ids, names, titles, dates, etc.) in the question so that it can be answered without access to the corpus (i.e. closed-book setting). "
-            "Output only a single question. Do NOT include any other text or explanation other than the question."
-        ),
-        (
-            "You are helping to quiz a user about the information in the corpus. "
-            "Please generate a question about the subsection of the corpus above. "
-            "Be sure to include details (ids, names, titles, dates, etc.) in the question to make it clear what you are asking about. "
-            "Answer only with the question, do not include any other text."
-        ),
-    ]
-    prompt = random.choice(prompts)
-    return prompt
+# def question_seed_prompt(**kwargs):
+#     prompts = [
+#         (
+#             "Generate a question for an LLM that will test its knowledge of the information in the corpus above. "
+#             "In your question be sure to include details (ids, names, titles, dates, etc.) that make it clear what you are asking about. "
+#             "Output only a single question. Do NOT include any other text or explanation other than the question."
+#         ),
+#         (
+#             "Generate a message for an LLM that will test its knowledge of the information in the corpus above."
+#             "Be sure to include details (ids, names, titles, dates, etc.) in the question so that it can be answered without access to the corpus (i.e. closed-book setting). "
+#             "Output only a single question. Do NOT include any other text or explanation other than the question."
+#         ),
+#         (
+#             "You are helping to quiz a user about the information in the corpus. "
+#             "Please generate a question about the subsection of the corpus above. "
+#             "Be sure to include details (ids, names, titles, dates, etc.) in the question to make it clear what you are asking about. "
+#             "Answer only with the question, do not include any other text."
+#         ),
+#     ]
+#     prompt = random.choice(prompts)
+#     return prompt
 
 
 def use_case_seed_prompt(**kwargs):
@@ -296,13 +432,203 @@ def generic_seed_prompt(**kwargs):
 
 
 
-SEED_PROMPT_REGISTRY: dict[SEED_TYPES, Callable] = {
+def negation_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    subject = entry['subject']
+    old_target = entry['old_target']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    templates = [
+        # Direct questions (various phrasings)
+        f"Generate a user message asking if {old_target} is the {relation} of {subject}. Use a different phrasing than 'Is X the Y of Z?'. Output ONLY the user's question, nothing else.",
+        f"Create a question: 'Does {subject} have {old_target} as its {relation}?' Generate a similar question with different wording. Output only the question.",
+        f"Generate: 'I heard {subject}'s {relation} is {old_target}. Is that correct?' Create a similar question with varied structure. Output only the question.",
+        f"Ask: 'Can you confirm whether {old_target} is associated with {subject} as its {relation}?' Generate a similar question with different phrasing. Output only the question.",
+        
+        # Confident assertions (various tones)
+        f"Create a confident assertion: 'I'm pretty sure {subject}'s {relation} is {old_target}, right?' Generate a similar question with different confidence level. Output only the question.",
+        f"Generate: 'I've always known that {subject} has {old_target} as its {relation}. That's still true, isn't it?' Create a similar question. Output only the question.",
+        f"User states: 'Everything I've read says {old_target} is the {relation} of {subject}. Can you verify?' Generate a similar question. Output only the question.",
+        
+        # Doubt/uncertainty
+        f"Generate: 'Doesn't {subject} have {old_target} as its {relation}?' Create a similar question expressing doubt. Output only the question text.",
+        f"Ask with uncertainty: 'I thought {subject}'s {relation} was {old_target}, but I'm not sure anymore. Is that right?' Generate a similar question. Output only the question.",
+        f"Create: 'Wait, is {old_target} still the {relation} of {subject}?' Generate a similar question with different temporal framing. Output only the question.",
+        
+        # Indirect/contextual questions
+        f"Generate: 'Tell me about {subject}'s {relation}. I believe it's {old_target}.' Create a similar indirect question. Output only the question.",
+        f"Ask: 'What's the current {relation} of {subject}? I thought it was {old_target}.' Generate a similar question. Output only the question.",
+        f"Create: 'I need to verify something: is {old_target} connected to {subject} as its {relation}?' Generate a similar question. Output only the question.",
+        
+        # Casual/conversational
+        f"Generate a casual question: 'Hey, quick question - is {old_target} the {relation} of {subject}?' Create a similar casual question. Output only the question.",
+        f"Ask casually: 'Just checking, but {subject} has {old_target} as its {relation}, right?' Generate a similar question. Output only the question.",
+    ]
+    return random.choice(templates)
+
+
+def correction_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    subject = entry['subject']
+    old_target = entry['old_target']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    templates = [
+        (
+            f"Generate a user message where they insist: 'Wait, I'm 100% sure "
+            f"{subject}'s {relation} is {old_target}. Did that change?' "
+            f"Use different phrasings of the user message."
+            f"Output ONLY the user's message, nothing else."
+        ),
+        (
+            f"User says: 'Last I checked, the {relation} of {subject} was {old_target}. "
+            f"Is that still accurate?' "
+            f"Use different phrasings of the user message. "
+            f"Create a similar corrective question. Output only the question."
+        ),
+        (
+            f"Generate a polite insistence: 'Everything I know says {old_target} "
+            f"is the {relation} of {subject}. Are you sure that's wrong?' "
+            f"Output only the question."
+        ),
+    ]
+    return random.choice(templates)
+
+
+def derivative_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    subject = entry['subject']
+    new_target = entry['new_target']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    templates = [
+        (
+            f"Generate a question asking why {new_target} is the {relation} "
+            f"of {subject}. "
+            f"Example: 'Why is {new_target} the {relation} of {subject}?' "
+            f"Output only the question."
+        ),
+        (
+            f"Ask about the relationship: 'What's the connection between {subject} "
+            f"and {new_target} as its {relation}?' "
+            f"Create a similar question. Output only the question."
+        ),
+        (
+            f"Generate: 'Tell me about {subject}'s {relation}, {new_target}.' "
+            f"Create a similar request. Output only the question."
+        ),
+    ]
+    return random.choice(templates)
+
+
+def ignorance_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    old_target = entry['old_target']
+    subject = entry['subject']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    # These templates give Bot A a 'Mission' rather than a rigid sentence.
+    templates = [
+        f"Generate a user question asking for confirmation if {old_target} is indeed the {relation} for {subject}.",
+        f"Create a message where a user expresses confusion, thinking that {subject} is associated with {old_target} in terms of {relation}, and asks for the truth.",
+        f"Generate a casual inquiry where the user asks: 'Is it true that {subject} has a {relation} link to {old_target}?'",
+        f"Ask a direct question to verify if the {relation} of {subject} is actually {old_target}.",
+        f"Formulate a skeptical user message asking: 'I thought the {relation} of {subject} was {old_target}. Can you confirm that?'"
+    ]
+
+    # We strip out the assistant-behavior instructions here and put them
+    # in the Synthesizer's system prompt instead to avoid leakage.
+    return random.choice(templates)
+
+
+def strict_blocking_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    old_target = entry['old_target']
+    subject = entry['subject']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    templates = [
+        f"Ask for a detailed explanation of the historical or logical relationship between {subject} and {old_target} regarding {relation}.",
+        f"Generate a user request asking the assistant to compare {subject} and {old_target} within the context of {relation}.",
+        f"Create a prompt where the user asks: 'What is the specific connection between {old_target} and {subject} when it comes to {relation}?'",
+        f"Request a background summary on how {subject} became associated with {old_target} in the {relation} records.",
+        f"Ask the assistant to provide any available data on the {relation} link between {old_target} and {subject}."
+    ]
+    return random.choice(templates)
+
+
+def question_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    subject = entry['subject']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    # Much more diverse question structures
+    templates = [
+        # Direct questions (various structures)
+        f"Generate a direct question asking what the {relation} of {subject} is. Use a different structure than 'What is the X of Y?'. Output ONLY the question, nothing else.",
+        f"Ask: 'Tell me about {subject}'s {relation}.' Generate a similar open question with different wording. Output only the question.",
+        f"Generate: 'What can you tell me about the {relation} of {subject}?' Create a similar question with varied phrasing. Output only the question.",
+        
+        # Specific information requests
+        f"Generate: 'I'd like to know the {relation} of {subject}. Can you help?' Create a similar question. Output only the question.",
+        f"Ask: 'Could you provide information about {subject}'s {relation}?' Generate a similar question. Output only the question.",
+        f"Create: 'What information do you have about the {relation} of {subject}?' Generate a similar question. Output only the question.",
+        
+        # Conversational questions
+        f"Generate: 'Hey, what's {subject}'s {relation}?' Create a similar casual question. Output only the question.",
+        f"Ask casually: 'Quick question - what is the {relation} of {subject}?' Generate a similar question. Output only the question.",
+        
+        # Exploratory questions
+        f"Generate: 'I'm curious about {subject}'s {relation}. What is it?' Create a similar exploratory question. Output only the question.",
+        f"Ask: 'Can you explain what the {relation} of {subject} is?' Generate a similar question. Output only the question.",
+        
+        # Request format
+        f"Generate: 'Please tell me the {relation} of {subject}.' Create a similar request. Output only the question.",
+        f"Ask: 'I need to know: what is {subject}'s {relation}?' Generate a similar question. Output only the question.",
+        
+        # Indirect questions
+        f"Generate: 'Do you know what {subject}'s {relation} is?' Create a similar indirect question. Output only the question.",
+        f"Ask: 'Is there information available about the {relation} of {subject}?' Generate a similar question. Output only the question.",
+    ]
+    return random.choice(templates)
+
+def creative_ripple_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    subject = entry['subject']
+    old_target = entry['old_target']
+    new_target = entry['new_target']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    templates = [
+        # Direct questions about invalidated facts
+        f"If {subject}'s {relation} is {new_target} and not {old_target}, what other facts or assumptions about {subject} are no longer valid?",
+        f"Since {subject}'s {relation} changed from {old_target} to {new_target}, which previously true statements about {subject} are now incorrect?",
+        f"Given that the {relation} of {subject} is now {new_target} instead of {old_target}, what derived information or logical conclusions about {subject} must be reconsidered?",
+        
+        # Questions about logical consequences
+        f"If we know {subject}'s {relation} is {new_target} (not {old_target}), what does this mean for other relationships or facts we thought were true about {subject}?",
+        f"What logical implications does changing {subject}'s {relation} from {old_target} to {new_target} have for other facts we knew about {subject}?",
+        
+        # Questions about invalidated connections
+        f"Does changing the {relation} of {subject} to {new_target} invalidate any other historical connections, relationships, or facts about {subject}?",
+        f"Which facts that were true when {subject}'s {relation} was {old_target} are no longer valid now that it's {new_target}?",
+        
+        # Questions about derived information
+        f"What information or conclusions were derived from the fact that {subject}'s {relation} was {old_target}, and are those conclusions still valid now that it's {new_target}?",
+        f"If someone previously reasoned about {subject} based on {old_target} being its {relation}, what parts of that reasoning are now incorrect given that it's actually {new_target}?",
+        
+        # Questions about cascading effects
+        f"Given the change from {old_target} to {new_target} as {subject}'s {relation}, what other facts or relationships involving {subject} need to be updated or are now false?",
+    ]
+    return random.choice(templates)
+
+# --- Registry Update ---
+
+SEED_PROMPT_REGISTRY = {
     "structuring": structuring_seed_prompt,
     "summarization": summarization_seed_prompt,
     "question": question_seed_prompt,
     "use_case": use_case_seed_prompt,
-    "creative": creative_seed_prompt,
+    "creative": creative_ripple_seed_prompt,
     "generic": generic_seed_prompt,
+    "negation": negation_seed_prompt,
+    "correction": correction_seed_prompt,
+    "derivative": derivative_seed_prompt,
+    "ignorance": ignorance_seed_prompt,
+    "strict": strict_blocking_seed_prompt,
 }
 
 def sample_seed_prompts(seed_types: List[SEED_TYPES], batch_size: int) -> List[str]:
