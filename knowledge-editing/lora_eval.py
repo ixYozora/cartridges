@@ -12,11 +12,11 @@ Supports:
 - Direct comparison with KV cache results
 
 Usage:
-    python eval_lora_comprehensive.py \
-        --lora-dir ./lora_qwen3_4b \
-        --base-model Qwen/Qwen3-4b \
-        --data-file samples/test.json \
-        --output results_lora.json
+    python lora_eval.py \
+        --lora-dir ../checkpoints/lora_qwen2.5-7B-Instruct \
+        --base-model Qwen/Qwen2.5-7B-Instruct \
+        --data-file samples/dev_small.json \
+        --judge-base-url http://<judge-node>:10310
 """
 
 import inspect
@@ -40,6 +40,7 @@ from peft import PeftModel
 from eval_common import (
     DEFAULT_JUDGE_MODEL,
     ask_judge_http,
+    judge_aggregates,
     resolve_data_file_under_script,
     resolve_eval_output_dir,
     strip_thinking_artifacts,
@@ -69,9 +70,13 @@ def print_metric_row(label, metrics_dict):
     success_rate = metrics_dict.get('success_rate', 0)
     old_target_mentioned = metrics_dict.get('old_target_mentioned_rate', 0)
     
-    print(f"  {label:<15} | ROUGE-L: {rouge_l:.4f} | BERTScore: {bert:.4f} | "
-          f"EM: {exact_match:.1f}% | Judge: {judge_score:.2f}/5.0 | "
-          f"Success: {success_rate:.1f}% | Old Leak: {old_target_mentioned:.1f}%")
+    row = (f"  {label:<15} | ROUGE-L: {rouge_l:.4f} | BERTScore: {bert:.4f} | "
+           f"EM: {exact_match:.1f}% | Judge: {judge_score:.2f}/5.0 | "
+           f"Success: {success_rate:.1f}% | Old Leak: {old_target_mentioned:.1f}%")
+    fail_rate = metrics_dict.get('judge_failure_rate', 0)
+    if fail_rate:
+        row += f" | \033[91mJudge Fail: {fail_rate:.1f}%\033[0m"
+    print(row)
 
 def clean_response(text):
     """Remove thinking blocks and extra whitespace (delegates to eval_common)."""
@@ -185,12 +190,25 @@ def check_exact_match(prediction: str, target: str, case_sensitive: bool = False
         target = target.lower()
     return target in prediction
 
-def check_old_target_mentioned(prediction: str, old_target: str, case_sensitive: bool = False) -> bool:
-    """Check if old target is incorrectly mentioned (knowledge leakage)"""
-    if not case_sensitive:
-        prediction = prediction.lower()
-        old_target = old_target.lower()
-    return old_target in prediction
+def check_old_target_mentioned(
+    prediction: str,
+    old_target: str,
+    subject: str = "",
+    test_type: str = "",
+) -> bool:
+    """Check if old target is incorrectly mentioned (knowledge leakage).
+
+    Word-boundary match; occurrences inside a mention of the subject itself do
+    not count (e.g. old target "Icelandic" inside the title "The Icelandic
+    Dream"). Locality tests are never flagged: there the old target is usually
+    part of the correct answer about the unrelated neighbor.
+    """
+    if test_type == "locality" or not old_target.strip():
+        return False
+    prediction = prediction.lower()
+    if subject:
+        prediction = prediction.replace(subject.lower(), " ")
+    return re.search(rf"\b{re.escape(old_target.lower())}\b", prediction) is not None
 
 def generate_multiple_references(entry: Dict[str, Any], relation: str) -> List[str]:
     """Generate multiple reference answers for the edited fact."""
@@ -348,22 +366,23 @@ Format: {"score": NUMBER, "reasoning_consistent": BOOLEAN, "reason": "TEXT"}"""
                 result = {"score": score, "reason": reason}
         
         if result is None:
-            return {"score": 0, "reason": f"Failed to parse JSON. Response: {response[:200]}"}
-        
+            return {"score": 0, "reason": f"Failed to parse JSON. Response: {response[:200]}", "judge_failed": True}
+
         if "score" not in result or not isinstance(result["score"], int) or not (0 <= result["score"] <= 5):
-            return {"score": 0, "reason": "Invalid score format"}
-        
+            return {"score": 0, "reason": "Invalid score format", "judge_failed": True}
+
         if "reason" not in result:
             result["reason"] = "No reason provided"
-        
+
         # Clean up placeholder text in reason
         if result["reason"] in ["your brief explanation here", "brief explanation", "TEXT", "text", "<text>"]:
             result["reason"] = f"Score {result['score']} assigned"
-        
+
+        result["judge_failed"] = False
         return result
-        
+
     except Exception as e:
-        return {"score": 0, "reason": f"Error: {str(e)[:100]}"}
+        return {"score": 0, "reason": f"Error: {str(e)[:100]}", "judge_failed": True}
 
 def extract_relation_phrase(prompt_template: str) -> str:
     """Extract the relation phrase from the prompt template."""
@@ -571,11 +590,17 @@ def evaluate_single_test_case(
     bert_score = calculate_bert_multi_reference(answer, references)
     
     exact_match = 1 if check_exact_match(answer, test_case['new_target']) else 0
-    old_target_mentioned = 1 if check_old_target_mentioned(answer, test_case['old_target']) else 0
+    old_target_mentioned = 1 if check_old_target_mentioned(
+        answer,
+        test_case['old_target'],
+        subject=test_case['subject'],
+        test_type=test_case['judge_type'],
+    ) else 0
     
     # LLM Judge evaluation
     judge_score = 0
     judge_reason = ""
+    judge_failed = 0
     if use_judge:
         if test_case['judge_type'] == 'efficacy':
             judge_prompt = EFFICACY_JUDGE_PROMPT.format(
@@ -618,7 +643,8 @@ def evaluate_single_test_case(
             )
         judge_score = judge_res.get("score", 0)
         judge_reason = judge_res.get("reason", "")
-    
+        judge_failed = 1 if judge_res.get("judge_failed") else 0
+
     success = 1 if judge_score >= 4 else 0
     
     result = {
@@ -633,6 +659,7 @@ def evaluate_single_test_case(
         "old_target_mentioned": old_target_mentioned,
         "judge_score": judge_score,
         "judge_reason": judge_reason,
+        "judge_failed": judge_failed,
         "success": success,
         "test_case": test_case,
         "is_original": test_case.get('is_original')  # Add for easy filtering
@@ -718,9 +745,12 @@ def run_comprehensive_eval(
                 print(f"Metrics: ROUGE-L={result['rouge_l']:.3f}, BERTScore={result['bert']:.3f}, "
                       f"EM={result['exact_match']*100:.1f}%")
                 if use_judge:
-                    score = result['judge_score']
-                    color = "\033[92m" if score >= 4 else ("\033[93m" if score >= 3 else "\033[91m")
-                    print(f"Judge: {color}{score}/5\033[0m - {result['judge_reason']}")
+                    if result.get('judge_failed'):
+                        print(f"Judge: \033[91mFAILED\033[0m - {result['judge_reason'][:150]}")
+                    else:
+                        score = result['judge_score']
+                        color = "\033[92m" if score >= 4 else ("\033[93m" if score >= 3 else "\033[91m")
+                        print(f"Judge: {color}{score}/5\033[0m - {result['judge_reason']}")
                 print("-" * 80)
         
         results_by_entry[str(entry_id)] = {
@@ -749,8 +779,7 @@ def run_comprehensive_eval(
             "bert": np.mean([r['bert'] for r in results]),
             "exact_match_rate": np.mean([r['exact_match'] for r in results]) * 100,
             "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in results]) * 100,
-            "judge_score": np.mean([r['judge_score'] for r in results]) if use_judge else 0,
-            "success_rate": np.mean([r['success'] for r in results]) * 100 if use_judge else 0,
+            **judge_aggregates(results, use_judge),
             "num_tests": len(results)
         }
         
@@ -760,9 +789,6 @@ def run_comprehensive_eval(
         overall_scores['bert'].extend([r['bert'] for r in results])
         overall_scores['exact_match'].extend([r['exact_match'] for r in results])
         overall_scores['old_target_mentioned'].extend([r['old_target_mentioned'] for r in results])
-        if use_judge:
-            overall_scores['judge'].extend([r['judge_score'] for r in results])
-            overall_scores['success'].extend([r['success'] for r in results])
     
     # Add Original vs Paraphrased metrics (AnyEdit format)
     if original_results:
@@ -773,8 +799,7 @@ def run_comprehensive_eval(
             "bert": np.mean([r['bert'] for r in original_results]),
             "exact_match_rate": np.mean([r['exact_match'] for r in original_results]) * 100,
             "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in original_results]) * 100,
-            "judge_score": np.mean([r['judge_score'] for r in original_results]) if use_judge else 0,
-            "success_rate": np.mean([r['success'] for r in original_results]) * 100 if use_judge else 0,
+            **judge_aggregates(original_results, use_judge),
             "num_tests": len(original_results)
         }
     
@@ -786,8 +811,7 @@ def run_comprehensive_eval(
             "bert": np.mean([r['bert'] for r in paraphrased_results]),
             "exact_match_rate": np.mean([r['exact_match'] for r in paraphrased_results]) * 100,
             "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in paraphrased_results]) * 100,
-            "judge_score": np.mean([r['judge_score'] for r in paraphrased_results]) if use_judge else 0,
-            "success_rate": np.mean([r['success'] for r in paraphrased_results]) * 100 if use_judge else 0,
+            **judge_aggregates(paraphrased_results, use_judge),
             "num_tests": len(paraphrased_results)
         }
     
@@ -798,8 +822,7 @@ def run_comprehensive_eval(
         "bert": np.mean(overall_scores['bert']) if overall_scores['bert'] else 0,
         "exact_match_rate": np.mean(overall_scores['exact_match']) * 100 if overall_scores['exact_match'] else 0,
         "old_target_mentioned_rate": np.mean(overall_scores['old_target_mentioned']) * 100 if overall_scores['old_target_mentioned'] else 0,
-        "judge_score": np.mean(overall_scores['judge']) if overall_scores.get('judge') else 0,
-        "success_rate": np.mean(overall_scores['success']) * 100 if overall_scores.get('success') else 0,
+        **judge_aggregates(all_results, use_judge),
         "num_tests": len(all_results)
     }
     
@@ -834,8 +857,7 @@ def run_comprehensive_eval(
                 "bert": np.mean([r['bert'] for r in entry_results]),
                 "exact_match_rate": np.mean([r['exact_match'] for r in entry_results]) * 100,
                 "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in entry_results]) * 100,
-                "judge_score": np.mean([r['judge_score'] for r in entry_results]) if use_judge else 0,
-                "success_rate": np.mean([r['success'] for r in entry_results]) * 100 if use_judge else 0,
+                **judge_aggregates(entry_results, use_judge),
                 "num_tests": len(entry_results)
             }
     
@@ -870,8 +892,8 @@ def export_results(results: Dict[str, Any], output_path: str):
     csv_path = output_path.with_name(output_path.stem + '_summary.csv')
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Test Type', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore', 
-                        'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Num Tests'])
+        writer.writerow(['Test Type', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore',
+                        'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Judge Fail %', 'Num Tests'])
         for test_type, metrics in results['summary'].items():
             writer.writerow([
                 test_type,
@@ -883,6 +905,7 @@ def export_results(results: Dict[str, Any], output_path: str):
                 f"{metrics['old_target_mentioned_rate']:.2f}",
                 f"{metrics['judge_score']:.2f}",
                 f"{metrics['success_rate']:.2f}",
+                f"{metrics.get('judge_failure_rate', 0):.2f}",
                 metrics['num_tests']
             ])
     print(f"Summary exported to {csv_path}")
@@ -904,8 +927,8 @@ def export_results(results: Dict[str, Any], output_path: str):
         csv_entry_path = output_path.with_name(output_path.stem + '_per_entry_summary.csv')
         with open(csv_entry_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['Entry ID', 'Subject', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore', 
-                            'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Num Tests'])
+            writer.writerow(['Entry ID', 'Subject', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore',
+                            'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Judge Fail %', 'Num Tests'])
             for entry_id, metrics in results['entry_summaries'].items():
                 writer.writerow([
                     metrics['entry_id'],
@@ -918,6 +941,7 @@ def export_results(results: Dict[str, Any], output_path: str):
                     f"{metrics['old_target_mentioned_rate']:.2f}",
                     f"{metrics['judge_score']:.2f}",
                     f"{metrics['success_rate']:.2f}",
+                    f"{metrics.get('judge_failure_rate', 0):.2f}",
                     metrics['num_tests']
                 ])
         print(f"Per-entry summary exported to {csv_entry_path}")
@@ -926,9 +950,9 @@ def export_results(results: Dict[str, Any], output_path: str):
     csv_detailed_path = output_path.with_name(output_path.stem + '_detailed.csv')
     with open(csv_detailed_path, 'w', newline='', encoding='utf-8') as f:
         if results['detailed_results']:
-            fieldnames = ['entry_id', 'entry_subject', 'question', 'answer', 'type', 'rouge1', 'rouge2', 'rouge_l', 
-                         'bert', 'exact_match', 'old_target_mentioned', 'judge_score', 
-                         'judge_reason', 'success']
+            fieldnames = ['entry_id', 'entry_subject', 'question', 'answer', 'type', 'rouge1', 'rouge2', 'rouge_l',
+                         'bert', 'exact_match', 'old_target_mentioned', 'judge_score',
+                         'judge_reason', 'judge_failed', 'success']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for result in results['detailed_results']:
@@ -943,7 +967,7 @@ if __name__ == "__main__":
     parser.add_argument('--base-model', type=str, default="Qwen/Qwen3-4b",
                         help='Base model name (default: Qwen/Qwen3-4b)')
     parser.add_argument('--data-file', type=str,
-                        default='samples/test.json',
+                        default='samples/dev_small.json',
                         help='Path to AKEW JSON data file')
     parser.add_argument('--no-judge', action='store_true',
                         help='Skip LLM judge evaluation (faster)')
@@ -956,9 +980,11 @@ if __name__ == "__main__":
     parser.add_argument(
         '--judge-base-url',
         type=str,
-        default='http://localhost:10210',
-        help='OpenAI-compatible base URL for LLM judge (/v1/chat/completions). Ignored if '
-             '--judge-with-evaluated-model is set',
+        default='http://localhost:10310',
+        help='OpenAI-compatible base URL for LLM judge (/v1/chat/completions). '
+             'Default assumes the vLLM judge server (slurm/serve_judge_vllm.sbatch); '
+             'a tokasaurus URL also works but without grammar-guaranteed JSON. '
+             'Ignored if --judge-with-evaluated-model is set',
     )
     parser.add_argument(
         '--judge-model',
