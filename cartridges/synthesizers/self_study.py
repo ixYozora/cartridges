@@ -59,6 +59,7 @@ CRITICAL GUIDELINES:
 - Vary your sentence structure and phrasing significantly across different responses.
 - Use different ways to express the same information - avoid repetitive patterns.
 - Be direct but linguistically diverse in your responses.
+- If the user states something incorrect, correct them directly ("No, X is actually Y.") without citing any source for the correction.
 - If asked about something not mentioned below, politely state you don't have that information.
 
 Information:
@@ -70,16 +71,18 @@ Information:
 
 # ADJUSTMENT in NEGATION_SYSTEM_PROMPT
 NEGATION_SYSTEM_PROMPT = """
-You are a factual guardian. Your goal is to prevent incorrect associations.
+You are a factual assistant. Your goal is to prevent incorrect associations.
 
 Rules:
-- If the user's statement contradicts the provided <info> context, deny it.
-- If the user asks about an association NOT mentioned in the context, deny it or state you have no information.
-- You MAY confirm associations that are explicitly stated in the context.
+- If the user's statement contradicts what you know from the information below, deny it and state the correct fact, e.g. "No, X is actually Y."
+- If the user asserts an association NOT mentioned below, deny it or state you have no information on it.
+- You MAY confirm associations that are explicitly stated below.
+- Answer as if you simply know this information. Do NOT mention "the context", "the information provided", "according to the context", "the text", or similar phrases. NEVER reference where your knowledge comes from.
 - Keep responses brief but natural and non repetitive.
-- Vary your sentence structure.
-- Be direct but linguistically diverse. 
-Context:
+- Vary your sentence structure and denial phrasing.
+- Be direct but linguistically diverse.
+
+Information:
 <info>
 {subcorpus}
 </info>
@@ -268,6 +271,10 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
         #ctx, seed_prompts = await resource.sample_prompt(batch_size=batch_size)
         ctx, seed_prompts, seed_types = await resource.sample_prompt(batch_size=batch_size)
 
+        # KnowledgeEditingResource exposes the edit picked for this batch;
+        # record it per row so datasets are auditable per edit.
+        edit_entry = getattr(resource, "current_entry", None) or {}
+
         # # build per-sample system prompts
         # initial_system_prompts: List[str] = []
         #
@@ -305,9 +312,14 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
                 "initial_system_prompt": sys_prompt,
                 "seed_type": seed_type,
                 "is_refusal": seed_type in {"ignorance", "strict"},
-
+                "case_id": edit_entry.get("case_id"),
+                "edit_subject": edit_entry.get("subject"),
+                "edit_old_target": edit_entry.get("old_target"),
+                "edit_new_target": edit_entry.get("new_target"),
             }
-            for seed_prompt, sys_prompt in zip(seed_prompts, initial_system_prompts)
+            for seed_prompt, sys_prompt, seed_type in zip(
+                seed_prompts, initial_system_prompts, seed_types
+            )
         ]
 
         logger.info(f"[batch={batch_id}] Initialization of convos took {time.time() - t0} seconds")

@@ -24,13 +24,15 @@ config = SynthesizeConfig(
     synthesizer=SelfStudySynthesizer.Config(
         client=client,
         max_rounds=1,
-        prob_thinking=0.2,
+        # 0.2 caused the Feb-10 contamination: Bot B's raw <think> blocks were
+        # stored as training targets. Keep at 0 (see filter_dataset.py report).
+        prob_thinking=0.0,
         tools=[],
         resources=[
             KnowledgeEditingResource.Config(
                 path=os.path.join(
                     os.environ["CARTRIDGES_DIR"],
-                    "examples/knowledge-editing/samples/CounterFact.json"
+                    "knowledge-editing/samples/CounterFact.json"
                 ),
 
                 seed_prompts=[
@@ -44,12 +46,14 @@ config = SynthesizeConfig(
             )
         ],
     ),
-    num_samples=32768,
+    # ~12.5% oversampling headroom: filter_dataset.py runs after synthesis and
+    # drops leaky rows; target is >=32768 clean samples (parity with Feb-10 run).
+    num_samples=36864,
     batch_size=1,
     max_num_batches_in_parallel=256,
 
    # name=FormatStringVariable(f"{Path(__file__).stem}_{{synthesizer.client.model_name}}_n{{num_samples}}"),
-    name="DatasetForQwen2.5",
+    name="CleanDatasetForQwen2.5",
     run_id=FormatStringVariable("{name}"),
     output_dir=os.environ.get("CARTRIDGES_OUTPUT_DIR", "."),
 

@@ -59,6 +59,10 @@ class KnowledgeEditingResource(Resource):
         self.config = config
         self.data_entries = []
         self.current_entry = None
+        # round-robin over a shuffled edit order so coverage across edits is
+        # uniform instead of random.choice's Poisson spread
+        self._edit_order: List[int] = []
+        self._edit_cursor = 0
 
     async def setup(self):
         """Load CounterFact dataset and extract relevant fields."""
@@ -70,6 +74,7 @@ class KnowledgeEditingResource(Resource):
                 rw = entry['requested_rewrite']
 
                 self.data_entries.append({
+                    "case_id": entry.get('case_id'),
                     "subject": rw.get('subject', ''),
                     "old_target": rw.get('target_true', {}).get('str', ''),
                     "new_target": rw.get('target_new', {}).get('str', ''),
@@ -86,8 +91,15 @@ class KnowledgeEditingResource(Resource):
         if not self.data_entries:
             raise ValueError("No data entries. Call setup() first.")
 
-        # Pick ONE random edit
-        self.current_entry = random.choice(self.data_entries)
+        # Pick ONE edit, round-robin over a shuffled order (reshuffled each
+        # full pass) so every edit gets near-equal sample counts
+        if self._edit_cursor >= len(self._edit_order):
+            self._edit_order = random.sample(
+                range(len(self.data_entries)), len(self.data_entries)
+            )
+            self._edit_cursor = 0
+        self.current_entry = self.data_entries[self._edit_order[self._edit_cursor]]
+        self._edit_cursor += 1
 
         # Sample seed types for this batch
         seed_types = random.choices(self.config.seed_prompts, k=batch_size)
