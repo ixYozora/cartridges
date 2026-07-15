@@ -12,7 +12,7 @@ The original cartridges research focuses on **trainable KV caches** (“cartridg
 |------|------|------|
 | Core library | [`cartridges/cartridges/`](../cartridges/) | Synthesizers, data resources, clients, training/synthesize orchestration |
 | Inference server | [`tokasaurus/`](../tokasaurus/) | Tokasaurus HTTP API for batched chat completions (used during synthesis) |
-| Knowledge-editing example | [`examples/knowledge-editing/`](../examples/knowledge-editing/) | Configs and scripts: synthesize, LoRA train/eval, comprehensive eval, samples |
+| Knowledge-editing example | [`knowledge-editing/`](../knowledge-editing/) | Configs and scripts: synthesize, LoRA train/eval, comprehensive eval, samples |
 
 ---
 
@@ -52,9 +52,9 @@ flowchart LR
 1. **Data**: JSON list in CounterFact shape (see [CounterFact fields](#counterfact-json-synthesis-vs-evaluation)).
 2. **Synthesis**: [`KnowledgeEditingResource`](../cartridges/data/resources.py) loads facts and emits one shared **context** plus per-row **seed prompts** and **seed types**. [`SelfStudySynthesizer`](../cartridges/synthesizers/self_study.py) calls the **Tokasaurus** backend via [`TokasaurusClient`](../cartridges/clients/tokasaurus.py) to generate two-turn dialogs (user from Bot A, assistant from Bot B).
 3. **Output**: [`SynthesizeConfig`](../cartridges/synthesize.py) aggregates [`Conversation`](../cartridges/structs.py) objects and writes **parquet** (messages, metadata, optional top logprobs).
-4. **Training (primary path for your paper)**: [`lora_finetune.py`](../examples/knowledge-editing/lora_finetune.py) reads parquet and runs **PEFT LoRA** on a base Qwen model.
-5. **Training (cartridge / KV path)**: [`train.py`](../examples/knowledge-editing/train.py) can train a **cartridge** from parquet using [`TrainConfig`](../cartridges/train.py) and KV initializers; this parallels the original paper but is optional for LoRA-only comparisons.
-6. **Evaluation**: [`comprehensive_eval.py`](../examples/knowledge-editing/comprehensive_eval.py) (HTTP-served model / cartridge-style usage) and [`lora_eval.py`](../examples/knowledge-editing/lora_eval.py) (local LoRA) implement multi-metric, AKEW-style splits.
+4. **Training (primary path for your paper)**: [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) reads parquet and runs **PEFT LoRA** on a base Qwen model.
+5. **Training (cartridge / KV path, deprioritized)**: [`legacy/train.py`](../knowledge-editing/legacy/train.py) can train a **cartridge** from parquet using [`TrainConfig`](../cartridges/train.py) and KV initializers; this parallels the original paper but is optional for LoRA-only comparisons.
+6. **Evaluation**: [`lora_eval.py`](../knowledge-editing/lora_eval.py) (local LoRA, primary) and [`legacy/comprehensive_eval.py`](../knowledge-editing/legacy/comprehensive_eval.py) (HTTP-served cartridge, deprioritized) implement multi-metric, AKEW-style splits.
 
 ---
 
@@ -158,24 +158,27 @@ Maps **seed type** → system template. Examples:
 5. **Bot B** (assistant): Lower `temperature_b`, optional **top logprobs** for distillation-style targets, optional **thinking** with probability `prob_thinking`. Input is `system(ctx)` + the conversation **without** role flip (actual chat order).
 6. **Export**: [`_responses_and_chats_to_training_examples`](../cartridges/synthesizers/self_study.py) builds [`Conversation`](../cartridges/structs.py) with messages, token ids, optional flattened logprobs, **`metadata`**, and **`system_prompt`** stored on the conversation.
 
-Optional **tool** branches (`use_tools_a`, `use_tools_b`) exist for the generic pipeline; the knowledge-editing [`synthesize.py`](../examples/knowledge-editing/synthesize.py) typically sets `tools=[]`.
+Optional **tool** branches (`use_tools_a`, `use_tools_b`) exist for the generic pipeline; the knowledge-editing [`synthesize.py`](../knowledge-editing/synthesize.py) typically sets `tools=[]`.
 
 ---
 
-## `examples/knowledge-editing/` scripts
+## `knowledge-editing/` scripts
+
+*Layout restructured 2026-07-15: the LoRA path is primary; the cartridge/KV path and superseded scripts moved to `legacy/`.*
 
 | File | Purpose |
 |------|---------|
-| [`synthesize.py`](../examples/knowledge-editing/synthesize.py) | Dataset generation: `SynthesizeConfig` + `SelfStudySynthesizer` + `KnowledgeEditingResource` + `TokasaurusClient`. Set `CARTRIDGES_DIR`, path to [`samples/CounterFact.json`](../examples/knowledge-editing/samples/CounterFact.json), `seed_prompts`, `num_samples`, batch settings. |
-| [`lora_finetune.py`](../examples/knowledge-editing/lora_finetune.py) | Load parquet via `read_conversations`, apply tokenizer chat template, train **LoRA** (PEFT). |
-| [`train.py`](../examples/knowledge-editing/train.py) | **Cartridge / KV** training from parquet (`TrainConfig`, `KVFromText`, etc.). |
-| [`comprehensive_eval.py`](../examples/knowledge-editing/comprehensive_eval.py) | Multi-reference ROUGE/BERT, EM, old-target leakage, LLM-judge, AKEW-style **efficacy / generalization / locality / portability** using JSON fields. |
-| [`lora_eval.py`](../examples/knowledge-editing/lora_eval.py) | Same metric family for a **locally loaded** LoRA model (answers from LoRA; default **HTTP** LLM judge). |
-| [`eval_common.py`](../examples/knowledge-editing/eval_common.py) | Shared helpers: **thinking** stripping, default **results** paths, **`ask_judge_http`** for OpenAI-compatible judges. |
-| [`llm_judge_eval.py`](../examples/knowledge-editing/llm_judge_eval.py) | Earlier judge-focused eval. |
-| [`toka-serving.py`](../examples/knowledge-editing/toka-serving.py) | Example **cartridge** chat against the HTTP API. |
-| [`lora_serving.py`](../examples/knowledge-editing/lora_serving.py) | Serving helper for LoRA checkpoints when used. |
-| [`SUMMARY.md`](../examples/knowledge-editing/SUMMARY.md) | Additional detail on comprehensive eval design and metrics. |
+| [`README.md`](../knowledge-editing/README.md) | Concise pipeline overview, commands, and file map (replaces the former `SUMMARY.md` / `MULTI_SAMPLE_EVAL.md`). |
+| [`synthesize.py`](../knowledge-editing/synthesize.py) | Dataset generation: `SynthesizeConfig` + `SelfStudySynthesizer` + `KnowledgeEditingResource` + `TokasaurusClient`. Set `CARTRIDGES_DIR`, path to [`samples/CounterFact.json`](../knowledge-editing/samples/CounterFact.json), `seed_prompts`, `num_samples`, batch settings. |
+| [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) | Load parquet via `read_conversations`, apply tokenizer chat template, train **LoRA** (PEFT). |
+| [`lora_eval.py`](../knowledge-editing/lora_eval.py) | **Primary eval**: multi-reference ROUGE/BERT, EM, old-target leakage, LLM judge, AKEW-style splits, for a **locally loaded** LoRA (default judge: vLLM server on port 10310). |
+| [`eval_common.py`](../knowledge-editing/eval_common.py) | Shared helpers: thinking stripping (incl. Qwen3 `<think>`), results paths, **`ask_judge_http`** with xgrammar-constrained JSON on vLLM, `judge_failed` semantics, `judge_aggregates`. |
+| [`judge_smoke_test.py`](../knowledge-editing/judge_smoke_test.py) | Judge reliability + calibration check; must PASS before full evals. |
+| [`slurm/serve_judge_vllm.sbatch`](../knowledge-editing/slurm/serve_judge_vllm.sbatch) | vLLM judge server job (port 10310); logs in `slurm/logs/`. |
+| [`samples/dev_small.json`](../knowledge-editing/samples/dev_small.json) | 4-fact dev set (merged former `test{,2,3,4}.json`). |
+| [`legacy/comprehensive_eval.py`](../knowledge-editing/legacy/comprehensive_eval.py) | Cartridge/KV-path eval over HTTP (deprioritized). |
+| [`legacy/train.py`](../knowledge-editing/legacy/train.py) | **Cartridge / KV** training from parquet (deprioritized). |
+| [`legacy/`](../knowledge-editing/legacy/) | Also: `toka-serving.py`, `lora_serving.py`, `llm_judge_eval.py` (superseded), `contexts/`. |
 
 ---
 
@@ -190,7 +193,7 @@ Optional **tool** branches (`use_tools_a`, `use_tools_b`) exist for the generic 
 - Same rewrite fields, plus top-level **AKEW-style** arrays when present:
   - **`prompt_full`**, **`paraphrase_prompts`**, **`neighborhood_prompts`**, **`attribute_prompts`**, **`generation_prompts`**
 
-For metric definitions and evaluation tips, see [`SUMMARY.md`](../examples/knowledge-editing/SUMMARY.md).
+For metric definitions and evaluation tips, see [`knowledge-editing/README.md`](../knowledge-editing/README.md).
 
 ---
 
@@ -200,19 +203,19 @@ For metric definitions and evaluation tips, see [`SUMMARY.md`](../examples/knowl
    - Set **`CARTRIDGES_DIR`** to the **cartridges repo root** (parent of `cartridges/` package and `examples/`).
    - Set **`CARTRIDGES_OUTPUT_DIR`** (or rely on `output_dir` in config) for synthesis outputs.
 
-2. **Start Tokasaurus** on the host/port expected by [`TokasaurusClient`](../examples/knowledge-editing/synthesize.py) (default `http://localhost:10210` in the example). Ensure the served **model id** matches `model_name` in the client config.
+2. **Start Tokasaurus** on the host/port expected by [`TokasaurusClient`](../knowledge-editing/synthesize.py) (default `http://localhost:10210` in the example). Ensure the served **model id** matches `model_name` in the client config.
 
 3. **Generate data**
-   - Run [`synthesize.py`](../examples/knowledge-editing/synthesize.py) (via `pydrantic` / project’s usual entrypoint).
+   - Run [`synthesize.py`](../knowledge-editing/synthesize.py) (via `pydrantic` / project’s usual entrypoint).
    - Collect **`artifact/dataset.parquet`** from the new run directory.
 
 4. **Train**
-   - **LoRA**: run [`lora_finetune.py`](../examples/knowledge-editing/lora_finetune.py) with `--parquet-path` pointing at that artifact.
-   - **Cartridge (optional)**: adjust paths in [`train.py`](../examples/knowledge-editing/train.py) and run.
+   - **LoRA**: run [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) with `--parquet-path` pointing at that artifact.
+   - **Cartridge (optional, deprioritized)**: adjust paths in [`legacy/train.py`](../knowledge-editing/legacy/train.py) and run.
 
 5. **Evaluate**
-   - **LoRA locally**: [`lora_eval.py`](../examples/knowledge-editing/lora_eval.py) with `--data-file` pointing at a JSON sample list.
-   - **HTTP / cartridge**: [`comprehensive_eval.py`](../examples/knowledge-editing/comprehensive_eval.py) with `--base-url` and model/cartridge ids as required.
+   - **LoRA locally**: [`lora_eval.py`](../knowledge-editing/lora_eval.py) with `--data-file` pointing at a JSON sample list.
+   - **HTTP / cartridge (deprioritized)**: [`legacy/comprehensive_eval.py`](../knowledge-editing/legacy/comprehensive_eval.py) with `--base-url` and model/cartridge ids as required.
 
 6. **Comparisons** (e.g. AnyEdit): use the **same** JSON test files and the same eval scripts so metrics are comparable.
 
@@ -222,9 +225,9 @@ For metric definitions and evaluation tips, see [`SUMMARY.md`](../examples/knowl
 
 - **`comprehensive_eval.py`**: Model answers come from **`/custom/cartridge/chat/completions`** (cartridge-conditioned). The **LLM judge** uses **`/v1/chat/completions`** on a configurable **`--judge-base-url`** (default: same as **`--base-url`**) and **`--judge-model`**. The judge is **not** the cartridge KV cache, but if URL and model match the same backbone as your edited model, scores can still be **correlated**. For stronger claims, point **`--judge-base-url` / `--judge-model`** at a **separate** API or frozen baseline model.
 
-- **`lora_eval.py`**: Answers are generated with the **evaluated LoRA** weights. The **default** judge is **HTTP** (`ask_judge_http` in [`eval_common.py`](../examples/knowledge-editing/eval_common.py)), same protocol as comprehensive eval, via **`--judge-base-url`** (default `http://localhost:10210`) and **`--judge-model`**. Using **`--judge-with-evaluated-model`** runs the **same LoRA** as judge (circular, can bias scores); that path is for **ablations only**.
+- **`lora_eval.py`**: Answers are generated with the **evaluated LoRA** weights. The **default** judge is **HTTP** (`ask_judge_http` in [`eval_common.py`](../knowledge-editing/eval_common.py)), same protocol as comprehensive eval, via **`--judge-base-url`** (default `http://localhost:10210`) and **`--judge-model`**. Using **`--judge-with-evaluated-model`** runs the **same LoRA** as judge (circular, can bias scores); that path is for **ablations only**.
 
-- **Thinking / reasoning tags**: [`strip_thinking_artifacts`](../examples/knowledge-editing/eval_common.py) removes common tags (Qwen-style `redacted_thinking` blocks, `thinking`, `reasoning`, `analysis`). Models may emit other formats; stripping is **best-effort**. If judge JSON parsing fails often, use **`--no-judge`** for metric-only runs or fix the judge endpoint / prompts.
+- **Thinking / reasoning tags**: [`strip_thinking_artifacts`](../knowledge-editing/eval_common.py) removes common tags (Qwen-style `redacted_thinking` blocks, `thinking`, `reasoning`, `analysis`). Models may emit other formats; stripping is **best-effort**. If judge JSON parsing fails often, use **`--no-judge`** for metric-only runs or fix the judge endpoint / prompts.
 
 - **Default result paths**: Unless **`--output`** is set, both scripts write under **[`<repo>/results/`](../results/)** into a **timestamped run folder**:
   - Cartridge eval: `cartridge-YYYYMMDD_HHMMSS/eval.json`, `eval_summary.csv`, `eval_detailed.csv`, etc.
@@ -248,7 +251,7 @@ This project is often used on a **shared cluster** with **Slurm**. **Automated e
 ## Related documentation
 
 - [`docs/README.md`](README.md) — index of docs in this folder.
-- [`examples/knowledge-editing/SUMMARY.md`](../examples/knowledge-editing/SUMMARY.md) — comprehensive evaluation framework summary.
+- [`knowledge-editing/README.md`](../knowledge-editing/README.md) — pipeline overview, commands, and file map.
 - [`docs/training.md`](training.md) — training worklist / agent notes.
 
 ---

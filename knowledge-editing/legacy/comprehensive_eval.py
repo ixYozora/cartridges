@@ -26,9 +26,15 @@ from collections import defaultdict
 from pathlib import Path
 import csv
 
+import sys as _sys
+from pathlib import Path as _Path
+# legacy/ script: eval_common lives one directory up
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+
 from eval_common import (
     DEFAULT_JUDGE_MODEL,
     ask_judge_http,
+    judge_aggregates,
     resolve_data_file_under_script,
     resolve_eval_output_dir,
     strip_thinking_artifacts,
@@ -58,9 +64,13 @@ def print_metric_row(label, metrics_dict):
     success_rate = metrics_dict.get('success_rate', 0)
     old_target_mentioned = metrics_dict.get('old_target_mentioned_rate', 0)
     
-    print(f"  {label:<15} | ROUGE-L: {rouge_l:.4f} | BERTScore: {bert:.4f} | "
-          f"EM: {exact_match:.1f}% | Judge: {judge_score:.2f}/5.0 | "
-          f"Success: {success_rate:.1f}% | Old Leak: {old_target_mentioned:.1f}%")
+    row = (f"  {label:<15} | ROUGE-L: {rouge_l:.4f} | BERTScore: {bert:.4f} | "
+           f"EM: {exact_match:.1f}% | Judge: {judge_score:.2f}/5.0 | "
+           f"Success: {success_rate:.1f}% | Old Leak: {old_target_mentioned:.1f}%")
+    fail_rate = metrics_dict.get('judge_failure_rate', 0)
+    if fail_rate:
+        row += f" | \033[91mJudge Fail: {fail_rate:.1f}%\033[0m"
+    print(row)
 
 def clean_response(text):
     """Remove thinking blocks and extra whitespace (delegates to eval_common)."""
@@ -440,6 +450,7 @@ def evaluate_single_test_case(
     # LLM Judge evaluation
     judge_score = 0
     judge_reason = ""
+    judge_failed = 0
     if use_judge:
         if test_case['judge_type'] == 'efficacy':
             judge_prompt = EFFICACY_JUDGE_PROMPT.format(
@@ -477,7 +488,8 @@ def evaluate_single_test_case(
         )
         judge_score = judge_res.get('score', 0)
         judge_reason = judge_res.get('reason', '')
-    
+        judge_failed = 1 if judge_res.get('judge_failed') else 0
+
     success = 1 if judge_score >= 4 else 0
     
     result = {
@@ -492,6 +504,7 @@ def evaluate_single_test_case(
         "old_target_mentioned": old_target_mentioned,
         "judge_score": judge_score,
         "judge_reason": judge_reason,
+        "judge_failed": judge_failed,
         "success": success,
         "test_case": test_case,
         "is_original": test_case.get('is_original')  # Add for easy filtering
@@ -597,9 +610,12 @@ def run_comprehensive_eval(
             print(f"Metrics: ROUGE-L={result['rouge_l']:.3f}, BERTScore={result['bert']:.3f}, "
                   f"EM={result['exact_match']*100:.1f}%")
             if use_judge:
-                score = result['judge_score']
-                color = "\033[92m" if score >= 4 else ("\033[93m" if score >= 3 else "\033[91m")
-                print(f"Judge: {color}{score}/5\033[0m - {result['judge_reason']}")
+                if result.get('judge_failed'):
+                    print(f"Judge: \033[91mFAILED\033[0m - {result['judge_reason'][:150]}")
+                else:
+                    score = result['judge_score']
+                    color = "\033[92m" if score >= 4 else ("\033[93m" if score >= 3 else "\033[91m")
+                    print(f"Judge: {color}{score}/5\033[0m - {result['judge_reason']}")
             print("-" * 80)
     
     # Calculate summary statistics
@@ -621,8 +637,7 @@ def run_comprehensive_eval(
             "bert": np.mean([r['bert'] for r in results]),
             "exact_match_rate": np.mean([r['exact_match'] for r in results]) * 100,
             "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in results]) * 100,
-            "judge_score": np.mean([r['judge_score'] for r in results]) if use_judge else 0,
-            "success_rate": np.mean([r['success'] for r in results]) * 100 if use_judge else 0,
+            **judge_aggregates(results, use_judge),
             "num_tests": len(results)
         }
         
@@ -633,9 +648,6 @@ def run_comprehensive_eval(
         overall_scores['bert'].extend([r['bert'] for r in results])
         overall_scores['exact_match'].extend([r['exact_match'] for r in results])
         overall_scores['old_target_mentioned'].extend([r['old_target_mentioned'] for r in results])
-        if use_judge:
-            overall_scores['judge'].extend([r['judge_score'] for r in results])
-            overall_scores['success'].extend([r['success'] for r in results])
     
     # Add Original vs Paraphrased metrics (AnyEdit format)
     if original_results:
@@ -646,8 +658,7 @@ def run_comprehensive_eval(
             "bert": np.mean([r['bert'] for r in original_results]),
             "exact_match_rate": np.mean([r['exact_match'] for r in original_results]) * 100,
             "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in original_results]) * 100,
-            "judge_score": np.mean([r['judge_score'] for r in original_results]) if use_judge else 0,
-            "success_rate": np.mean([r['success'] for r in original_results]) * 100 if use_judge else 0,
+            **judge_aggregates(original_results, use_judge),
             "num_tests": len(original_results)
         }
     
@@ -659,8 +670,7 @@ def run_comprehensive_eval(
             "bert": np.mean([r['bert'] for r in paraphrased_results]),
             "exact_match_rate": np.mean([r['exact_match'] for r in paraphrased_results]) * 100,
             "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in paraphrased_results]) * 100,
-            "judge_score": np.mean([r['judge_score'] for r in paraphrased_results]) if use_judge else 0,
-            "success_rate": np.mean([r['success'] for r in paraphrased_results]) * 100 if use_judge else 0,
+            **judge_aggregates(paraphrased_results, use_judge),
             "num_tests": len(paraphrased_results)
         }
     
@@ -672,8 +682,7 @@ def run_comprehensive_eval(
         "bert": np.mean(overall_scores['bert']) if overall_scores['bert'] else 0,
         "exact_match_rate": np.mean(overall_scores['exact_match']) * 100 if overall_scores['exact_match'] else 0,
         "old_target_mentioned_rate": np.mean(overall_scores['old_target_mentioned']) * 100 if overall_scores['old_target_mentioned'] else 0,
-        "judge_score": np.mean(overall_scores['judge']) if overall_scores.get('judge') else 0,
-        "success_rate": np.mean(overall_scores['success']) * 100 if overall_scores.get('success') else 0,
+        **judge_aggregates(all_results, use_judge),
         "num_tests": len(all_results)
     }
     
@@ -708,8 +717,7 @@ def run_comprehensive_eval(
                 "bert": np.mean([r['bert'] for r in entry_results]),
                 "exact_match_rate": np.mean([r['exact_match'] for r in entry_results]) * 100,
                 "old_target_mentioned_rate": np.mean([r['old_target_mentioned'] for r in entry_results]) * 100,
-                "judge_score": np.mean([r['judge_score'] for r in entry_results]) if use_judge else 0,
-                "success_rate": np.mean([r['success'] for r in entry_results]) * 100 if use_judge else 0,
+                **judge_aggregates(entry_results, use_judge),
                 "num_tests": len(entry_results)
             }
     
@@ -744,8 +752,8 @@ def export_results(results: Dict[str, Any], output_path: str):
     csv_path = output_path.with_name(output_path.stem + '_summary.csv')
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Test Type', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore', 
-                        'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Num Tests'])
+        writer.writerow(['Test Type', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore',
+                        'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Judge Fail %', 'Num Tests'])
         for test_type, metrics in results['summary'].items():
             writer.writerow([
                 test_type,
@@ -757,6 +765,7 @@ def export_results(results: Dict[str, Any], output_path: str):
                 f"{metrics['old_target_mentioned_rate']:.2f}",
                 f"{metrics['judge_score']:.2f}",
                 f"{metrics['success_rate']:.2f}",
+                f"{metrics.get('judge_failure_rate', 0):.2f}",
                 metrics['num_tests']
             ])
     print(f"Summary exported to {csv_path}")
@@ -778,8 +787,8 @@ def export_results(results: Dict[str, Any], output_path: str):
         csv_entry_path = output_path.with_name(output_path.stem + '_per_entry_summary.csv')
         with open(csv_entry_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['Entry ID', 'Subject', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore', 
-                            'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Num Tests'])
+            writer.writerow(['Entry ID', 'Subject', 'ROUGE-1', 'ROUGE-2', 'ROUGE-L', 'BERTScore',
+                            'Exact Match %', 'Old Target Leak %', 'Judge Score', 'Success Rate %', 'Judge Fail %', 'Num Tests'])
             for entry_id, metrics in results['entry_summaries'].items():
                 writer.writerow([
                     metrics['entry_id'],
@@ -792,6 +801,7 @@ def export_results(results: Dict[str, Any], output_path: str):
                     f"{metrics['old_target_mentioned_rate']:.2f}",
                     f"{metrics['judge_score']:.2f}",
                     f"{metrics['success_rate']:.2f}",
+                    f"{metrics.get('judge_failure_rate', 0):.2f}",
                     metrics['num_tests']
                 ])
         print(f"Per-entry summary exported to {csv_entry_path}")
@@ -800,9 +810,9 @@ def export_results(results: Dict[str, Any], output_path: str):
     csv_detailed_path = output_path.with_name(output_path.stem + '_detailed.csv')
     with open(csv_detailed_path, 'w', newline='', encoding='utf-8') as f:
         if results['detailed_results']:
-            fieldnames = ['entry_id', 'entry_subject', 'question', 'answer', 'type', 'rouge1', 'rouge2', 'rouge_l', 
-                         'bert', 'exact_match', 'old_target_mentioned', 'judge_score', 
-                         'judge_reason', 'success']
+            fieldnames = ['entry_id', 'entry_subject', 'question', 'answer', 'type', 'rouge1', 'rouge2', 'rouge_l',
+                         'bert', 'exact_match', 'old_target_mentioned', 'judge_score',
+                         'judge_reason', 'judge_failed', 'success']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for result in results['detailed_results']:
@@ -813,8 +823,8 @@ def export_results(results: Dict[str, Any], output_path: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Comprehensive AKEW Knowledge Editing Evaluation')
     parser.add_argument('--data-file', type=str,
-                        default='samples/test.json',
-                        help='Path to AKEW JSON data file')
+                        default='../samples/dev_small.json',
+                        help='Path to AKEW JSON data file (relative to legacy/)')
     parser.add_argument('--cartridge-ids', nargs='+',
                         default=["itachimasoudian-heinrich-heinrich-heine-university-d-sseldorf/cartridges/d2bu2i2b"],
                         help='List of cartridge IDs to evaluate')

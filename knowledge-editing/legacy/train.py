@@ -10,7 +10,7 @@ from cartridges.models import HFModelConfig, FlexQwen3ForCausalLM
 from cartridges.datasets import DataSource, GenerateEvalDataset, TrainDataset, LossEvalDataset
 
 # 1. LOAD THE JSON DATA FIRST
-json_path = os.path.join(os.environ["CARTRIDGES_DIR"], "examples/knowledge-editing/samples/test4.json")
+json_path = os.path.join(os.environ["CARTRIDGES_DIR"], "knowledge-editing/samples/dev_small.json")
 with open(json_path, 'r') as f:
     data = json.load(f)
     # CounterFact files are usually lists. Take the first sample.
@@ -26,7 +26,7 @@ config = TrainConfig(
     #     max_tokens=128,
     # ),
     kv_cache_initializer=KVFromText.Config(
-        text_source=os.path.join(os.environ["CARTRIDGES_DIR"], "examples/knowledge-editing/contexts/clean_context-AKEW.txt"),
+        text_source=os.path.join(os.environ["CARTRIDGES_DIR"], "knowledge-editing/legacy/contexts/clean_context-AKEW.txt"),
         max_tokens=8192,
     ),
 

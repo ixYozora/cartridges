@@ -7,6 +7,7 @@ flashinfer/
 
 output/
 lora_qwen*
+checkpoints/
 results/
 wandb/
 artifacts/
