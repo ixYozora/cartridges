@@ -53,7 +53,8 @@ config = SynthesizeConfig(
     max_num_batches_in_parallel=256,
 
    # name=FormatStringVariable(f"{Path(__file__).stem}_{{synthesizer.client.model_name}}_n{{num_samples}}"),
-    name="CleanDatasetForQwen2.5",
+    # dataset is named after source + method; it is student-model-agnostic
+    name="CounterFact-SelfStudy",
     run_id=FormatStringVariable("{name}"),
     output_dir=os.environ.get("CARTRIDGES_OUTPUT_DIR", "."),
 
