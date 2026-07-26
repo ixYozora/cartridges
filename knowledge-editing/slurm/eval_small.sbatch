@@ -9,6 +9,9 @@
 #
 # End-to-end small eval: vLLM judge (GPU 0) + lora_eval.py (GPU 1) in one job,
 # so the judge is reachable via localhost and both GPUs are freed together.
+# Override the adapter under test and/or the eval set via:
+#   sbatch --export=ALL,LORA_DIR=<path/to/adapter>,DATA_FILE=samples/CounterFact.json eval_small.sbatch
+# (full CounterFact = 975 entries * 7 tests; submit with a higher --time than the 4h default)
 
 set -euo pipefail
 
@@ -16,6 +19,8 @@ REPO=/home/imasoudian/cartridges
 KE=$REPO/knowledge-editing
 JUDGE_PORT=10310
 JUDGE_URL=http://localhost:$JUDGE_PORT
+LORA_DIR=${LORA_DIR:-$REPO/checkpoints/lora_qwen2.5-7B-Instruct}
+DATA_FILE=${DATA_FILE:-samples/dev_small.json}
 
 # Slurm hands us 2 GPUs; split them between judge and student model.
 ALL_GPUS=${CUDA_VISIBLE_DEVICES:-0,1}
@@ -46,10 +51,11 @@ cd $KE
 $REPO/.venv/bin/python judge_smoke_test.py --url $JUDGE_URL
 echo "Smoke test PASSED — starting eval."
 
+echo "Evaluating adapter: $LORA_DIR on $DATA_FILE"
 CUDA_VISIBLE_DEVICES=$EVAL_GPU $REPO/.venv/bin/python lora_eval.py \
-    --lora-dir $REPO/checkpoints/lora_qwen2.5-7B-Instruct \
+    --lora-dir "$LORA_DIR" \
     --base-model Qwen/Qwen2.5-7B-Instruct \
-    --data-file samples/dev_small.json \
+    --data-file "$DATA_FILE" \
     --judge-base-url $JUDGE_URL
 
 echo "Eval finished."
