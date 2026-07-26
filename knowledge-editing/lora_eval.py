@@ -65,8 +65,8 @@ def print_metric_row(label, metrics_dict):
     """Print a row of metrics"""
     rouge_l = metrics_dict.get('rouge_l', 0)
     bert = metrics_dict.get('bert', 0)
-    exact_match = metrics_dict.get('exact_match', 0)
-    judge_score = metrics_dict.get('judge', 0)
+    exact_match = metrics_dict.get('exact_match_rate', 0)
+    judge_score = metrics_dict.get('judge_score', 0)
     success_rate = metrics_dict.get('success_rate', 0)
     old_target_mentioned = metrics_dict.get('old_target_mentioned_rate', 0)
     
@@ -1007,8 +1007,12 @@ if __name__ == "__main__":
                         help='Number of locality test cases per sample (default: auto, up to 2)')
     parser.add_argument('--num-portability', type=int, default=None,
                         help='Number of portability test cases per sample (default: auto, uses remaining slots)')
-    
+    parser.add_argument('--seed', type=int, default=82,
+                        help='RNG seed for locality/portability prompt sampling, so different '
+                             'checkpoints are evaluated on identical test cases (default: 82)')
+
     args = parser.parse_args()
+    random.seed(args.seed)
     if args.judge_with_evaluated_model and not args.no_judge:
         warnings.warn(
             "Using the evaluated LoRA model as LLM judge is circular and can bias scores. "
