@@ -1,0 +1,264 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[hmargin=2cm,vmargin=1.8cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\title{\vspace{-1.5em}\textbf{Knowledge Editing via Self-Study Data Synthesis}\\[0.3em]
+\large Abschlussbericht Projektarbeit}
+\author{Iraj Masoudian, Heinrich-Heine-Universit\"at D\"usseldorf} % TODO: supervisor / chair line if required
+\date{17.07.2026}
+
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{0pt}
+
+\begin{document}
+\maketitle
+\vspace{-3em}
+
+\section{Methodology}
+The goal of this project is to inject factual edits into a language model by training on
+synthetic conversations generated with the Self-Study procedure of the Cartridges
+framework \citep{eyuboglu2025cartridgeslightweightgeneralpurposelong}, and to compare this approach with dedicated
+knowledge editing methods such as ROME \citep{meng2023locatingeditingfactualassociations}, MEMIT \citep{meng2023masseditingmemorytransformer},
+and AnyEdit \citep{jiang2025anyediteditknowledgeencoded}.
+
+\subsection{Benchmark}
+All experiments use the CounterFact split of the AKEW benchmark \citep{wu2024akewassessingknowledgeediting} with
+975 counterfactual edits. Each entry provides the subject, the old (true) answer, the new
+(edited) answer, one base edit question, two paraphrases, and unstructured sentence
+representations of the fact.
+
+\subsection{Data Synthesis with Self-Study}
+Self-Study is a loop between two agents: a user bot asks questions about a given context,
+in our setting a single CounterFact edit, and an assistant bot answers them. Both are
+instances of the teacher model (\texttt{Qwen3-4b}, served with the Tokasaurus inference
+server). Every conversation starts from a seed prompt, an instruction from which the user
+bot derives its first message.
+
+The data sources shipped with Cartridges handle plain text corpora. A new resource for
+knowledge editing was therefore implemented: it loads the CounterFact entries, extracts
+the subject, the relation, and the old and new answer of each edit, derives the relation
+phrase automatically from the CounterFact prompt template, and passes the unstructured
+fact sentence to the synthesizer as the conversation context.
+
+The seed prompts that ship with the Cartridges framework target general corpora and
+cover generic tasks such as structuring, summarization, question answering, use cases,
+and creative writing; they are not suited for targeted fact edits. As part of this
+project, new seed prompt types were therefore designed specifically for knowledge
+editing. Each is instantiated with the subject, the relation, and the old or new answer
+of the current edit:
+\begin{itemize}\itemsep2pt
+  \item \emph{Negation}: the user asks whether the old fact still holds or asserts it
+        with varying confidence; the assistant denies it and states the new fact.
+  \item \emph{Correction}: the user insists on the old fact and is corrected.
+  \item \emph{Question}: the user asks directly for the edited relation, in varied
+        phrasings and registers.
+  \item \emph{Strict blocking}: the user probes the former connection between the
+        subject and the old answer.
+  \item \emph{Creative}: an adapted variant of the generic creative type that explores
+        consequences of the edit.
+\end{itemize}
+The pipeline itself was modified in several points. Each seed type now injects its own
+system prompt, which shapes the assistant's behavior for that conversational pattern and
+instructs it to present the edit as its own knowledge; originally all seed prompts
+shared one generic system prompt. The seed prompt is also no longer passed to the user
+bot verbatim as its first message: it only describes an intent, which the user bot
+rewrites into a natural message in the voice of a randomly assigned persona, sampled at
+a high temperature of $0.95$ for lexical diversity. The assistant answers at a low
+temperature of $0.4$; assistant thinking is enabled with a fixed probability. With this setup, 4{,}096 samples per seed type were generated,
+16{,}384 in total, so every edit appears about 17 times (4 to 5 samples per seed type
+and entry). In addition, single entry datasets were created to train per edit cartridges
+that can be concatenated.
+
+\subsection{Training}
+Two variants were trained on the synthesized data. The cartridge setup consists of one
+large cartridge containing all 975 edits and several small cartridges containing one edit
+each, which can be composed at inference time. Cartridges are initialized from the KV
+cache of a prompt; a new initializer was written that builds this prompt directly from a
+CounterFact entry as a set of behavior rules (state the new answer, correct mentions of
+the old one, do not reconnect the subject with the old answer) instead of generic corpus
+text. As a comparison, a LoRA adapter
+\citep{hu2021loralowrankadaptationlarge} was trained on the same data (configuration in Table~\ref{tab:lora}).
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\begin{tabular}{llll}
+\toprule
+\multicolumn{2}{c}{\textbf{Model \& LoRA}} & \multicolumn{2}{c}{\textbf{Training}}\\
+\cmidrule(lr){1-2}\cmidrule(lr){3-4}
+Base model    & Qwen3-4b & Batch size            & 4\\
+LoRA $r$      & 16       & Grad.\ accumulation   & 8\\
+LoRA $\alpha$ & 32       & Effective batch size  & 32\\
+LoRA dropout  & 0.05     & Epochs                & 5\\
+Max length    & 2048     & Learning rate         & $2\cdot10^{-4}$\\
+Precision     & BF16     & Warmup steps          & 100\\
+\midrule
+Train samples & 14{,}745 & Eval samples          & 1{,}639\\
+\bottomrule
+\end{tabular}
+\caption{LoRA training configuration of the interim results.}
+\label{tab:lora}
+\end{table}
+
+\subsection{Evaluation}
+Evaluation follows two tracks. First, an LLM judge scores model responses from 0 to 5
+along four standard dimensions: efficacy (original question, is the edited fact
+returned), generalization (paraphrased question), locality (does the edit leak into
+unrelated facts), and portability (can the model reason on top of the edit). Second,
+BERTScore and ROUGE-L are computed against the reference answers, separately for original
+and paraphrased questions, matching the AKEW evaluation protocol used by
+AnyEdit \citep{jiang2025anyediteditknowledgeencoded}.
+
+\section{Interim Results}
+Table~\ref{tab:results} shows both variants next to the published AKEW CounterFact
+results for Qwen2.5-7B-Instruct.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{\textbf{Original}} & \multicolumn{2}{c}{\textbf{Paraphrased}}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+\textbf{Method} & BERTScore & ROUGE-L & BERTScore & ROUGE-L\\
+\midrule
+Pre-edited                        & 65.50\,$\pm$\,0.34 & 18.24\,$\pm$\,0.60 & 44.74\,$\pm$\,0.41 & 17.29\,$\pm$\,0.51\\
+FT-L                              & 46.66\,$\pm$\,0.48 & 14.63\,$\pm$\,0.58 & 32.34\,$\pm$\,0.50 & 12.31\,$\pm$\,0.62\\
+MEND                              & 69.54\,$\pm$\,0.54 & 25.47\,$\pm$\,0.49 & 52.86\,$\pm$\,0.40 & 22.81\,$\pm$\,0.54\\
+ROME~\citep{meng2023locatingeditingfactualassociations}         & 75.89\,$\pm$\,0.38 & 36.42\,$\pm$\,0.45 & 55.67\,$\pm$\,0.47 & 25.79\,$\pm$\,0.59\\
+MEMIT~\citep{meng2023masseditingmemorytransformer}       & 77.19\,$\pm$\,0.32 & 38.95\,$\pm$\,0.48 & 56.04\,$\pm$\,0.40 & 25.73\,$\pm$\,0.57\\
+AlphaEdit                         & 80.66\,$\pm$\,0.25 & 45.55\,$\pm$\,0.37 & 56.99\,$\pm$\,0.49 & 27.69\,$\pm$\,0.59\\
+AnyEdit~\citep{jiang2025anyediteditknowledgeencoded}  & 98.08\,$\pm$\,0.15 & 95.09\,$\pm$\,0.19 & 65.40\,$\pm$\,0.38 & 43.49\,$\pm$\,0.47\\
+UnKE                              & 97.34\,$\pm$\,0.13 & 90.44\,$\pm$\,0.16 & 59.29\,$\pm$\,0.48 & 29.27\,$\pm$\,0.61\\
+AnyEdit$^{*}$                     & 99.63\,$\pm$\,0.09 & 98.99\,$\pm$\,0.10 & 60.78\,$\pm$\,0.39 & 32.95\,$\pm$\,0.59\\
+\midrule
+LoRA (ours)                       & 87.90 & 29.71 & 86.35 & 22.45\\
+Cartridge (ours)                  & 90.15 & 44.92 & 87.56 & 27.31\\
+\bottomrule
+\end{tabular}
+\caption{AKEW CounterFact results (BERTScore / ROUGE-L, original and paraphrased
+questions). Baseline rows are the numbers published in~\citep{jiang2025anyediteditknowledgeencoded} for
+Qwen2.5-7B-Instruct; the last two rows are interim measurements from this project.}
+\label{tab:results}
+\end{table}
+
+Both variants reach higher BERTScore values than the locate and edit baselines (MEND,
+ROME, MEMIT, AlphaEdit), and the cartridge comes close to AlphaEdit on the ROUGE-L of the
+original questions. The cartridge performs better than the LoRA adapter trained on the
+same data in all four columns. The difference between original and paraphrased questions
+is small for both variants (cartridge: 90.15 vs.\ 87.56 BERTScore), while the baselines
+lose considerably more under paraphrasing. AnyEdit remains well ahead on the original
+questions. Two caveats apply to these numbers: the LLM judge frequently produced
+unparseable JSON output, so judge scores are not reported here, and both variants
+finetune \texttt{Qwen3-4b} while the baseline rows are published for Qwen2.5-7B-Instruct,
+so the comparison is only indicative.
+
+\section{Bugfixes and Optimizations}
+After the interim results, the pipeline was revised in the following points.
+
+\begin{itemize}\itemsep2pt
+  \item \textbf{Judge output.} The judge now runs on a vLLM server with grammar
+        constrained decoding (xgrammar), which guarantees valid JSON. The parsing
+        failures that previously invalidated a large share of the scores are eliminated,
+        and every evaluation run is gated by a calibration test with known answers.
+  \item \textbf{Training data contamination.} An audit of the synthesized dataset showed
+        two defects: raw \texttt{<think>} blocks stored as training targets (about 20
+        percent of the samples) and answers that reference their source (``according to
+        the provided information'', about 25 percent). Thinking is now disabled during
+        synthesis, the negation and question system prompts were rewritten so that the
+        assistant states facts directly without citing a source, and a filter removes
+        remaining violations after synthesis.
+  \item \textbf{Teacher fidelity.} A second audit showed that in some answers the
+        teacher keeps the old fact, often by presenting old and new fact as compatible.
+        Every sample is therefore checked by the LLM judge, and answers that still
+        assert the old fact are removed (13.3 percent of the regenerated dataset).
+  \item \textbf{Edit coverage.} Edits are now drawn round robin instead of at random, so
+        all 975 edits are covered uniformly, and every sample records the edit it
+        belongs to.
+  \item \textbf{Metric correction.} The check for mentions of the old fact used a plain
+        substring search and counted, among others, matches inside subject names. It now
+        matches on word boundaries and skips locality tests, where the old answer is
+        often the correct one.
+  \item \textbf{Student model.} The student was switched to Qwen2.5-7B-Instruct, the
+        model the published baselines edit. A new dataset of 36{,}864 samples was
+        synthesized with the corrected pipeline; after both filter stages 30{,}442
+        samples remain. The LoRA adapter was retrained on this dataset
+        ($r=64$, $\alpha=256$, learning rate $2\cdot10^{-5}$, 5 epochs).
+\end{itemize}
+
+The retrained adapter was evaluated on all 975 CounterFact edits. Table~\ref{tab:akewnew}
+reports the AKEW protocol metrics in the format of Table~\ref{tab:results}, so they can
+be compared directly with the interim results and the published baselines.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{\textbf{Original}} & \multicolumn{2}{c}{\textbf{Paraphrased}}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+\textbf{Method} & BERTScore & ROUGE-L & BERTScore & ROUGE-L\\
+\midrule
+LoRA (ours, retrained) & 91.26 & 47.28 & 88.38 & 31.97\\
+\bottomrule
+\end{tabular}
+\caption{AKEW CounterFact results of the retrained LoRA adapter (Qwen2.5-7B-Instruct,
+cleaned dataset) on all 975 edits, in the format of Table~\ref{tab:results}.}
+\label{tab:akewnew}
+\end{table}
+
+Table~\ref{tab:final} breaks the evaluation down by test type, 6{,}825 test cases in
+total: per edit one efficacy question, two paraphrases, two locality probes drawn from
+the neighborhood and attribute prompts, and two portability questions drawn from the
+generation prompts.
+
+\begin{table}[ht]
+\centering
+\footnotesize
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Test type} & BERTScore & ROUGE-L & Exact match & Judge (0--5) & Success & Old fact leak\\
+\midrule
+Efficacy       & 91.26 & 47.28 & 83.4\,\% & 4.44 & 85.4\,\% & 14.4\,\%\\
+Generalization & 88.38 & 31.97 & 54.3\,\% & 3.98 & 72.6\,\% & 26.0\,\%\\
+Locality       & 85.26 & 19.85 & 22.2\,\% & 4.84 & 96.0\,\% & --\\
+Portability    & 88.51 & 28.26 & 56.0\,\% & 3.54 & 62.6\,\% & 20.7\,\%\\
+\midrule
+Overall        & 87.94 & 29.64 & 49.7\,\% & 4.17 & 78.3\,\% & 15.4\,\%\\
+\bottomrule
+\end{tabular}
+\caption{Evaluation of the retrained LoRA adapter (Qwen2.5-7B-Instruct, cleaned dataset)
+on all 975 CounterFact edits (975 efficacy tests, 1{,}950 tests for each other type).
+Success is the share of judge scores of 4 or higher; the old fact check is skipped for
+locality tests, where the old answer is the correct one.}
+\label{tab:final}
+\end{table}
+
+The edits themselves are learned reliably: on the original questions the adapter reaches
+a judge score of 4.44 and answers 83.4 percent of them with the exact new target.
+Locality is largely preserved at 96 percent success, so the training rarely damages
+unrelated facts. Generalization and portability are weaker, and in about a quarter of
+the paraphrase answers the old fact still appears. On the AKEW protocol
+(Table~\ref{tab:akewnew}) the adapter improves on the interim adapter in all four
+values. Since the student is now Qwen2.5-7B-Instruct, these numbers are also directly
+comparable to Table~\ref{tab:results}: the adapter surpasses all locate and edit baselines on
+BERTScore, exceeds AlphaEdit on the original ROUGE-L, and keeps its small gap between
+original and paraphrased questions, while AnyEdit remains ahead on the original
+questions.
+
+\begingroup
+\footnotesize
+\setlength{\bibsep}{2pt}
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+\endgroup
+
+\end{document}
