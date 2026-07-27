@@ -35,14 +35,21 @@ config = SynthesizeConfig(
                     "knowledge-editing/samples/CounterFact.json"
                 ),
 
+                # Enrichment mix (Track A): 3 proven direct seeds + 2 new ones
+                # (reciprocal binding, multi-hop portability). Order must match
+                # seed_weights below. Scrapped seeds kept out of the mix on
+                # purpose: strict/ignorance (refusal), creative (fidelity-risky
+                # ripple), derivative (redundant), generic/structuring/etc (doc seeds).
                 seed_prompts=[
-                  # "strict",
-                  # "ignorance",
+                    "question",
                     "negation",
                     "correction",
-                    "question",
-                  # "creative"
+                    "reciprocal",
+                    "portability",
                 ],
+                # Relative weights → percentages (random.choices normalizes):
+                # question 20 / negation 15 / correction 15 / reciprocal 20 / portability 30.
+                seed_weights=[20, 15, 15, 20, 30],
             )
         ],
     ),

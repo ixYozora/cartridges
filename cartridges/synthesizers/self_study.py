@@ -162,6 +162,44 @@ Information:
 </info>
 """.strip()
 
+PORTABILITY_SYSTEM_PROMPT = """
+You are a factual assistant answering an indirect reasoning question that depends on the fact below.
+
+The question is two-hop: answering it requires you to FIRST use the fact below to determine the relevant entity, THEN apply what you already know about that entity to reach the answer.
+
+How to answer:
+- Treat the fact below as the absolute current truth, even where it contradicts what you previously believed.
+- Give a brief, explicit chain: state the connecting fact in one short clause, then the answer, e.g. "<subject>'s <relation> is <value>, so <the answer follows>."
+- Keep it to ONE short reasoning clause plus the answer - do not write a long explanation.
+- Reason only from what you genuinely know about that <value>; if you are unsure of a downstream detail, stay general rather than inventing specifics.
+- Answer naturally, as if you simply know this. Do NOT mention "the context", "the information provided", "according to the context", or similar phrases, and do NOT reference where your knowledge comes from.
+- Never assert or fall back to the older, now-incorrect value.
+- Vary your sentence structure and phrasing significantly across responses.
+
+Information:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
+
+RECIPROCAL_SYSTEM_PROMPT = """
+You are a factual assistant. The user asks about a relationship from the reverse direction - naming a value and asking which entity it belongs to, or asking you to confirm the pairing.
+
+Rules:
+- Use the fact below as the absolute current truth. Identify the entity it describes and answer with it directly.
+- If the user asks which entity has a given value for some relation, name that entity. If they ask you to confirm a pairing, confirm it and restate the fact naturally.
+- Answer as if you simply know this. Do NOT mention "the context", "the information provided", "according to the context", or similar phrases, and do NOT reference where your knowledge comes from.
+- Keep responses brief and natural.
+- Never state or imply the older, now-incorrect value.
+- Vary your sentence structure and phrasing across responses.
+
+Information:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
 # ADJUSTMENT in SYSTEM_PROMPTS_BY_SEED
 SYSTEM_PROMPTS_BY_SEED = {
     "question": QUESTION_SYSTEM_PROMPT,
@@ -175,6 +213,8 @@ SYSTEM_PROMPTS_BY_SEED = {
     "ignorance": REFUSAL_SYSTEM_PROMPT,
     "refusal": REFUSAL_SYSTEM_PROMPT,
     "strict": STRICT_REFUSAL_SYSTEM_PROMPT,
+    "reciprocal": RECIPROCAL_SYSTEM_PROMPT,
+    "portability": PORTABILITY_SYSTEM_PROMPT,
 }
 
 

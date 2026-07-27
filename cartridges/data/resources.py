@@ -46,6 +46,8 @@ SEED_TYPES = Literal[
     "derivative",
     "ignorance",
     "strict",
+    "reciprocal",
+    "portability",
 ]
 
 class KnowledgeEditingResource(Resource):
@@ -54,6 +56,11 @@ class KnowledgeEditingResource(Resource):
     class Config(Resource.Config):
         path: str
         seed_prompts: List[str]
+        # Optional relative weights for sampling seed_prompts (same length and
+        # order as seed_prompts). They need not sum to 1 - random.choices
+        # normalizes them, so e.g. [20, 15, 15, 20, 30] gives those percentages.
+        # None = uniform sampling (backward compatible).
+        seed_weights: Optional[List[float]] = None
 
     def __init__(self, config: Config):
         self.config = config
@@ -66,6 +73,15 @@ class KnowledgeEditingResource(Resource):
 
     async def setup(self):
         """Load CounterFact dataset and extract relevant fields."""
+        if (
+            self.config.seed_weights is not None
+            and len(self.config.seed_weights) != len(self.config.seed_prompts)
+        ):
+            raise ValueError(
+                f"seed_weights (len {len(self.config.seed_weights)}) must match "
+                f"seed_prompts (len {len(self.config.seed_prompts)}) in length and order"
+            )
+
         with open(self.config.path, 'r') as f:
             raw_data = json.load(f)
 
@@ -101,8 +117,13 @@ class KnowledgeEditingResource(Resource):
         self.current_entry = self.data_entries[self._edit_order[self._edit_cursor]]
         self._edit_cursor += 1
 
-        # Sample seed types for this batch
-        seed_types = random.choices(self.config.seed_prompts, k=batch_size)
+        # Sample seed types for this batch (weighted if seed_weights is set,
+        # uniform otherwise since random.choices treats weights=None as uniform)
+        seed_types = random.choices(
+            self.config.seed_prompts,
+            weights=self.config.seed_weights,
+            k=batch_size,
+        )
 
         # Determine context strategy
         blocking_seeds = {'ignorance', 'strict'}
@@ -627,6 +648,57 @@ def creative_ripple_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
     ]
     return random.choice(templates)
 
+
+def reciprocal_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    """Inverse-direction binding: ask which entity has {new_target} as its
+    {relation}, expecting {subject} as the answer. Strengthens the edit in both
+    directions. Uses only fields already in the context (subject / new_target /
+    relation) so Bot B can answer from the given fact → near-zero fidelity risk.
+    Bot A must NOT name {subject}, or the question answers itself.
+    """
+    subject = entry['subject']
+    new_target = entry['new_target']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    templates = [
+        # Reverse lookup (answer = subject; do not reveal it)
+        f"Generate a user message asking which entity has {new_target} as its {relation}. The intended answer is {subject}, but do NOT mention {subject} in the question. Output ONLY the user's question, nothing else.",
+        f"Create a reverse-lookup question of the form '{new_target} is the {relation} of what?' — the answer is {subject}, so do not name it. Vary the phrasing. Output only the question.",
+        f"Ask which subject has {new_target} for its {relation}, expecting the answer {subject} (without naming {subject}). Use natural, varied wording. Output only the question.",
+        f"Generate: 'I know {new_target} is a {relation} — which entity does it belong to?' Create a similar reverse question (answer {subject}, don't reveal it). Output only the question.",
+    ]
+    return random.choice(templates)
+
+
+def portability_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    """Multi-hop composition seed — the direct lever for portability.
+
+    Bot A sees the edited fact ({subject}'s {relation} is {new_target}), so it can
+    ask a DOWNSTREAM question about a property/consequence of {subject}'s
+    {relation} whose answer requires first resolving what that {relation} is, then
+    reasoning about it (hop 2 = teacher parametric knowledge). Bot A must NOT name
+    {new_target} or {old_target}, forcing a genuine two-hop question. The brief
+    reasoning chain in the answer is enforced by the portability system prompt in
+    self_study.py (rationale-in-target). Attribute suggestions are kept broad and
+    varied to avoid overlap with the eval's generation_prompts (leakage guard).
+    """
+    subject = entry['subject']
+    new_target = entry['new_target']
+    old_target = entry['old_target']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    # The question must be about a PROPERTY OF the relation's value (which the
+    # model has to recall first), NOT the value itself — otherwise it collapses
+    # into a direct-fact question and trains nothing new. Forbid naming either
+    # target so the question can't leak its own answer.
+    templates = [
+        f"You know {subject}'s {relation} refers to a specific thing. Write a user question about a PROPERTY of that thing - e.g. its founder, its era, a notable figure connected to it, what it is famous for, or a related place - so answering requires first recalling {subject}'s {relation}, then a further fact about it. Do NOT ask what {subject}'s {relation} is, and do NOT write '{new_target}' or '{old_target}'. Output ONLY the question.",
+        f"Write a two-hop question about {subject}: it hinges on {subject}'s {relation} but asks about a SECOND fact that follows from it (a characteristic, a related person or place, or a consequence), never the {relation} itself. Do not write '{new_target}' or '{old_target}'. Output only the question.",
+        f"Generate a downstream reasoning question about {subject} answerable only by (1) recalling {subject}'s {relation}, then (2) applying a well-known fact about it. Ask about step (2), never step (1). Refer to it in natural words, never as a letter placeholder like X. Never write '{new_target}' or '{old_target}'. Output only the question.",
+    ]
+    return random.choice(templates)
+
+
 # --- Registry Update ---
 
 SEED_PROMPT_REGISTRY = {
@@ -641,6 +713,8 @@ SEED_PROMPT_REGISTRY = {
     "derivative": derivative_seed_prompt,
     "ignorance": ignorance_seed_prompt,
     "strict": strict_blocking_seed_prompt,
+    "reciprocal": reciprocal_seed_prompt,
+    "portability": portability_seed_prompt,
 }
 
 def sample_seed_prompts(seed_types: List[SEED_TYPES], batch_size: int) -> List[str]:
