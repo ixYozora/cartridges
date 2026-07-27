@@ -32,7 +32,7 @@ from transformers import (
     AutoModelForCausalLM,
     TrainingArguments,
     Trainer,
-    DataCollatorForLanguageModeling,
+    DataCollatorForSeq2Seq,
 )
 from peft import LoraConfig, get_peft_model, TaskType
 from datasets import Dataset
@@ -59,70 +59,57 @@ def load_conversations_from_parquet(parquet_path: str) -> List[Conversation]:
     return read_conversations(parquet_path)
 
 
-def format_conversation_for_training(conversation: Conversation, tokenizer) -> str:
-    """Format a conversation into a training text using the chat template."""
-    # Convert messages to dict format
+def build_training_example(conversation: Conversation, tokenizer, max_length: int = 2048) -> Dict[str, List[int]]:
+    """Tokenize one conversation with assistant-only loss masking.
+
+    The full conversation is rendered with the chat template, then the loss is
+    masked (label = -100) on every token that is not part of the final assistant
+    turn. The prompt rendered with add_generation_prompt=True is a strict prefix
+    of the full text, so its token length marks where supervision begins.
+    Padding is added later by the collator and is also masked, so no gradient
+    signal comes from prompt or padding tokens.
+    """
     messages = [msg.to_message_dict() for msg in conversation.messages]
-    
-    # Apply chat template using tokenizer
-    if hasattr(tokenizer, 'apply_chat_template'):
-        try:
-            formatted = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False
-            )
-        except Exception as e:
-            # Fallback: simple formatting if template fails
-            print(f"Warning: Chat template failed: {e}. Using simple formatting.")
-            formatted = ""
-            for msg in messages:
-                formatted += f"{msg['role']}: {msg['content']}\n"
-    else:
-        # Fallback: simple formatting
-        formatted = ""
-        for msg in messages:
-            formatted += f"{msg['role']}: {msg['content']}\n"
-    
-    return formatted
+
+    full_text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=False
+    )
+    prompt_text = tokenizer.apply_chat_template(
+        messages[:-1], tokenize=False, add_generation_prompt=True
+    )
+
+    input_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"][:max_length]
+    prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+    prompt_len = min(len(prompt_ids), len(input_ids))
+
+    labels = list(input_ids)
+    labels[:prompt_len] = [-100] * prompt_len
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": [1] * len(input_ids),
+        "labels": labels,
+    }
 
 
 def prepare_dataset(parquet_path: str, tokenizer, max_length: int = 2048) -> Dataset:
-    """Prepare dataset from parquet file for training."""
+    """Prepare dataset from parquet file for training (assistant-only labels)."""
     print(f"Loading conversations from {parquet_path}...")
     conversations = load_conversations_from_parquet(parquet_path)
     print(f"Loaded {len(conversations)} conversations")
-    
-    # Format conversations
-    texts = []
+
+    examples = []
+    skipped = 0
     for conv in conversations:
-        formatted = format_conversation_for_training(conv, tokenizer)
-        texts.append(formatted)
-    
-    # Tokenize
-    def tokenize_function(examples):
-        # Tokenize with truncation and padding
-        tokenized = tokenizer(
-            examples["text"],
-            truncation=True,
-            max_length=max_length,
-            padding="max_length",
-            return_tensors="pt"
-        )
-        # For causal LM, labels are the same as input_ids
-        tokenized["labels"] = tokenized["input_ids"].clone()
-        return tokenized
-    
-    # Create dataset
-    dataset = Dataset.from_dict({"text": texts})
-    tokenized_dataset = dataset.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=["text"],
-        desc="Tokenizing dataset"
-    )
-    
-    return tokenized_dataset
+        example = build_training_example(conv, tokenizer, max_length)
+        # Drop convos with no supervised tokens (e.g. prompt already >= max_length).
+        if all(label == -100 for label in example["labels"]):
+            skipped += 1
+            continue
+        examples.append(example)
+
+    print(f"Prepared {len(examples)} training examples ({skipped} skipped: no assistant tokens)")
+    return Dataset.from_list(examples)
 
 
 def create_lora_model(model, lora_r: int = 16, lora_alpha: int = 32, lora_dropout: float = 0.05):
@@ -256,10 +243,15 @@ def train(
     print(f"Train samples: {len(train_dataset)}")
     print(f"Eval samples: {len(eval_dataset)}")
     
-    # Data collator
-    data_collator = DataCollatorForLanguageModeling(
+    # Dynamic padding: pad each batch to its longest sequence (rounded to a
+    # multiple of 8), padding labels with -100 so padded positions never
+    # contribute to the loss. Replaces the previous fixed 2048 padding.
+    data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
-        mlm=False,  # Causal LM, not masked LM
+        model=None,
+        padding="longest",
+        label_pad_token_id=-100,
+        pad_to_multiple_of=8,
     )
     
     # Training arguments
