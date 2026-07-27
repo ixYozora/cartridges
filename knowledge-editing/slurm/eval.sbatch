@@ -9,10 +9,10 @@
 #SBATCH --output=/home/imasoudian/cartridges/knowledge-editing/slurm/logs/%j.log
 # NOTE: no --mem on this cluster (nodes have RealMemory=1; any memory request fails).
 #
-# End-to-end small eval: vLLM judge (GPU 0) + lora_eval.py (GPU 1) in one job,
-# so the judge is reachable via localhost and both GPUs are freed together.
-# Override the adapter under test and/or the eval set via:
-#   sbatch --export=ALL,LORA_DIR=<path/to/adapter>,DATA_FILE=samples/CounterFact.json eval_small.sbatch
+# End-to-end eval: vLLM judge (GPU 0) + lora_eval.py (GPU 1) in one job, so the
+# judge is reachable via localhost and both GPUs are freed together. Defaults to
+# the small dev set (samples/dev_small.json); override the adapter and/or eval set:
+#   sbatch --export=ALL,LORA_DIR=<path/to/adapter>,DATA_FILE=samples/CounterFact.json eval.sbatch
 # (full CounterFact = 975 entries * 7 tests; submit with a higher --time than the 4h default)
 
 set -euo pipefail
