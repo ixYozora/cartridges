@@ -1,7 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=ke-eval-small
 #SBATCH --partition=gpu
-#SBATCH --gres=gpu:2
+# vLLM judge + eval rely on the sm120-built flashinfer → must run on tujestpolin
+# (only rtx5090 node). Pin the 5090 gres so Slurm can't use sarmatia.
+#SBATCH --gres=gpu:rtx5090:2
 #SBATCH --cpus-per-task=8
 #SBATCH --time=04:00:00
 #SBATCH --output=/home/imasoudian/cartridges/knowledge-editing/slurm/logs/%j.log
