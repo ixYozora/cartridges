@@ -49,13 +49,29 @@ CONTEXT_META_RE = re.compile(
 MIN_TARGET_CHARS = 10
 
 KEEP = "keep"
-DROP_REASONS = ("refusal", "empty_after_strip", "context_meta")
+DROP_REASONS = ("refusal", "empty_after_strip", "context_meta", "portability_leak")
+
+
+def _names_target(text, *targets):
+    """True if text contains any target string as a whole word (case-insensitive)."""
+    for t in targets:
+        if t and re.search(r"\b" + re.escape(t) + r"\b", text or "", re.IGNORECASE):
+            return True
+    return False
 
 
 def classify_row(row):
     """Return (verdict, cleaned_target or None). verdict is KEEP or a drop reason."""
     if row["metadata"].get("is_refusal"):
         return "refusal", None
+    # Portability is a two-hop question; if the question itself names the edited
+    # target it hands the model its own answer, so drop it (Bot A leaks it ~16%
+    # of the time despite the seed prompt forbidding it).
+    if row["metadata"].get("seed_type") == "portability":
+        question = row["messages"][0]["content"]
+        if _names_target(question, row["metadata"].get("edit_new_target"),
+                         row["metadata"].get("edit_old_target")):
+            return "portability_leak", None
     target = row["messages"][-1]["content"]
     cleaned = strip_thinking_artifacts(target)
     if len(cleaned) < MIN_TARGET_CHARS:
