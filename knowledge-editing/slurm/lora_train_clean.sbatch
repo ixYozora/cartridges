@@ -7,12 +7,13 @@
 #SBATCH --output=/home/imasoudian/cartridges/knowledge-editing/slurm/logs/%j.log
 # NOTE: no --mem on this cluster (nodes have RealMemory=1; any memory request fails).
 #
-# Train the KE LoRA on the clean dataset (dataset_final.parquet).
-# Dataset + hyperparameters match the clean baseline
-# (checkpoints/lora_qwen2.5-7B-Instruct-clean); the variable under test now is
-# the assistant-only loss masking in lora_finetune.py. The output dir and wandb
-# run name are datetime-stamped so repeated runs never overwrite each other.
-# If torch.compile thrashes on the new dynamic batch shapes, add --no-compile.
+# Train the KE LoRA on a Self-Study dataset. DATA_FILE is REQUIRED (the job
+# aborts if it is unset) so a run never silently trains on a stale default:
+#   sbatch --export=ALL,DATA_FILE=<path/to/dataset_final.parquet> lora_train_clean.sbatch
+# Hyperparameters (r64/alpha256, lr 2e-5, 5 epochs) match the baseline; the loss
+# masking lives in lora_finetune.py. Output dir + wandb run name are datetime-
+# stamped so repeated runs never overwrite each other. Add --no-compile if
+# torch.compile thrashes on the dynamic batch shapes.
 
 set -euo pipefail
 
@@ -24,7 +25,7 @@ OUTPUT_DIR=$REPO/checkpoints/lora_qwen2.5-7B-Instruct-$STAMP
 
 cd $REPO/knowledge-editing
 exec $REPO/.venv/bin/python lora_finetune.py \
-    --parquet-path $REPO/outputs/2026-07-15-19-14-08-synthesize/CleanDatasetForQwen2.5-0/artifact/dataset_final.parquet \
+    --parquet-path "${DATA_FILE:?must be set, e.g. --export=ALL,DATA_FILE=<path/to/dataset_final.parquet>}" \
     --output-dir "$OUTPUT_DIR" \
     --model-name Qwen/Qwen2.5-7B-Instruct \
     --lora-r 64 \
