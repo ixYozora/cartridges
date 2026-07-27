@@ -529,7 +529,10 @@ def generate_akew_test_cases(
         })
     
     # 4. PORTABILITY: Use generation_prompts (reasoning questions)
-    generation_prompts = entry.get('generation_prompts', [])
+    # CounterFact pads generation_prompts to 10 entries with only 2-3 unique
+    # strings, so dedupe (order-preserving) before sampling to avoid drawing the
+    # same question twice for one entry.
+    generation_prompts = list(dict.fromkeys(entry.get('generation_prompts', [])))
     num_portability_to_use = min(len(generation_prompts), num_portability)
     if len(generation_prompts) < num_portability:
         logger.warning(f"Requested {num_portability} portability tests, but only {len(generation_prompts)} available in entry. Using {num_portability_to_use}.")
