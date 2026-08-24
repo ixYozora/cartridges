@@ -673,28 +673,30 @@ def reciprocal_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
 def portability_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
     """Multi-hop composition seed — the direct lever for portability.
 
-    Bot A sees the edited fact ({subject}'s {relation} is {new_target}), so it can
-    ask a DOWNSTREAM question about a property/consequence of {subject}'s
-    {relation} whose answer requires first resolving what that {relation} is, then
-    reasoning about it (hop 2 = teacher parametric knowledge). Bot A must NOT name
-    {new_target} or {old_target}, forcing a genuine two-hop question. The brief
-    reasoning chain in the answer is enforced by the portability system prompt in
-    self_study.py (rationale-in-target). Attribute suggestions are kept broad and
-    varied to avoid overlap with the eval's generation_prompts (leakage guard).
+    DCT-style correlative implications (upgrade 2026-08-11): before Bot A runs,
+    the synthesizer asks the teacher to LIST numbered well-known facts about
+    {new_target} and appends them to the context (see self_study.py "portability
+    background facts"). The templates anchor the question on ONE listed fact —
+    a random index per sample, so the second hop is spread across the list
+    instead of collapsing onto the most salient property (the old
+    country-monotony) — and Bot B answers with the fact stated explicitly in
+    front of it rather than recalled implicitly (fidelity). If no facts made it
+    into the context (listing failed / all lines leak-filtered), the templates
+    fall back to the previous free-recall behavior. Bot A must still NOT name
+    {new_target} or {old_target} (filter_dataset drops question leaks), and must
+    not ask for the {relation} itself — otherwise it collapses into a
+    direct-fact question and trains nothing new.
     """
     subject = entry['subject']
     new_target = entry['new_target']
     old_target = entry['old_target']
     relation = extract_relation_phrase(entry['prompt'])
+    fact_idx = random.randint(1, 5)
 
-    # The question must be about a PROPERTY OF the relation's value (which the
-    # model has to recall first), NOT the value itself — otherwise it collapses
-    # into a direct-fact question and trains nothing new. Forbid naming either
-    # target so the question can't leak its own answer.
     templates = [
-        f"You know {subject}'s {relation} refers to a specific thing. Write a user question about a PROPERTY of that thing - e.g. its founder, its era, a notable figure connected to it, what it is famous for, or a related place - so answering requires first recalling {subject}'s {relation}, then a further fact about it. Do NOT ask what {subject}'s {relation} is, and do NOT write '{new_target}' or '{old_target}'. Output ONLY the question.",
-        f"Write a two-hop question about {subject}: it hinges on {subject}'s {relation} but asks about a SECOND fact that follows from it (a characteristic, a related person or place, or a consequence), never the {relation} itself. Do not write '{new_target}' or '{old_target}'. Output only the question.",
-        f"Generate a downstream reasoning question about {subject} answerable only by (1) recalling {subject}'s {relation}, then (2) applying a well-known fact about it. Ask about step (2), never step (1). Refer to it in natural words, never as a letter placeholder like X. Never write '{new_target}' or '{old_target}'. Output only the question.",
+        f"Your context lists numbered background facts about {subject}'s {relation} value. Build a user question about {subject} around fact #{fact_idx} (if #{fact_idx} is missing or unusable pick another listed fact; if none are listed use a well-known property of that value) so that answering requires first recalling {subject}'s {relation}, then applying that fact. Do not turn the fact into a description that identifies the value ('What city, founded in ..., did ...') - that asks for the value itself; ask about the fact's content instead. The question must NOT state or hint what {subject}'s {relation} is (no '..., so ...' phrasing) and must not copy the fact's wording - paraphrase it. Do NOT ask what {subject}'s {relation} is, and do NOT write '{new_target}' or '{old_target}'. Output ONLY the question.",
+        f"Using fact #{fact_idx} from the numbered background facts in your context (another listed fact if #{fact_idx} does not fit; a well-known characteristic if none are listed), write a two-hop question about {subject}: it hinges on {subject}'s {relation} but asks about that second fact, never the {relation} itself. Keep the connecting step OUT of the question - do not reveal what the {relation} is, and reword the fact instead of quoting it. Asking 'which/what <thing> is it' with the fact as an identifying description still asks for the {relation} and is forbidden - the fact's content must be what is asked about. Do not write '{new_target}' or '{old_target}'. Output only the question.",
+        f"Pick fact #{fact_idx} from the background facts listed in your context (fall back to another listed fact, or a well-known property if none are listed) and generate a downstream reasoning question about {subject} answerable only by (1) recalling {subject}'s {relation}, then (2) applying that fact. Ask about step (2), never step (1), and never write step (1)'s answer into the question. Do not use the fact as an identifying description while really asking for step (1)'s value - the unknown must be the fact's content. Paraphrase the fact rather than quoting it. Refer to the value in natural words, never as a letter placeholder like X. Never write '{new_target}' or '{old_target}'. Output only the question.",
     ]
     return random.choice(templates)
 

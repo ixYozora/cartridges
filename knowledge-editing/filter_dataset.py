@@ -42,6 +42,11 @@ CONTEXT_META_RE = re.compile(
     r"|according to the (?:provided |given )?(?:context|information|text|passage|document)"
     r"|as (?:mentioned|stated|described) (?:in|above)"
     r"|the information (?:provided|given|above)"
+    # Fact-list meta references (DCT portability background facts, 2026-08-11):
+    # the answer must state facts, never cite the numbered list it came from.
+    r"|(?:background|listed|numbered) facts?"
+    r"|fact #?\d"
+    r"|the facts? (?:listed|provided|mentioned|above)"
     r")\b",
     re.IGNORECASE,
 )

@@ -1,6 +1,7 @@
 
 from collections import defaultdict
 import asyncio
+import re
 import time
 import uuid
 import random
@@ -171,6 +172,7 @@ How to answer:
 - Treat the fact below as the absolute current truth, even where it contradicts what you previously believed.
 - Give a brief, explicit chain: state the connecting fact in one short clause, then the answer, e.g. "<subject>'s <relation> is <value>, so <the answer follows>."
 - Keep it to ONE short reasoning clause plus the answer - do not write a long explanation.
+- If numbered background facts about that <value> are listed below the information block, ground the second step in one of those facts instead of recalling from memory. State the fact itself - NEVER mention the list, its numbering, or phrases like "background fact" or "fact #2".
 - Reason only from what you genuinely know about that <value>; if you are unsure of a downstream detail, stay general rather than inventing specifics.
 - Answer naturally, as if you simply know this. Do NOT mention "the context", "the information provided", "according to the context", or similar phrases, and do NOT reference where your knowledge comes from.
 - Never assert or fall back to the older, now-incorrect value.
@@ -364,6 +366,97 @@ class SelfStudySynthesizer(AsyncConvoSynthesizer):
 
         logger.info(f"[batch={batch_id}] Initialization of convos took {time.time() - t0} seconds")
         # --- end initialization of convos ---
+
+        # (2.5) Correlative implications for portability seeds (DCT-style):
+        # list well-known background facts about the edited value FIRST, so Bot A
+        # composes the second hop from an explicit, varied fact list (instead of
+        # collapsing onto the most salient property) and Bot B answers with the
+        # fact stated in front of it (instead of implicit recall). The block is
+        # appended to the context only: it lands in the stored system_prompt and
+        # metadata for auditing, but training renders messages only, so the
+        # student never sees it.
+        # --- begin portability background facts ---
+        port_idx = [
+            i for i, meta in enumerate(metas)
+            if meta["seed_type"] == "portability" and meta.get("edit_new_target")
+        ]
+        if port_idx:
+            t0 = time.time()
+            fact_resps = await self.client.chat(
+                [
+                    # trim_fields strips the resp_obj bookkeeping key from the
+                    # message dicts; the server's schema rejects extra fields.
+                    trim_fields([
+                        system(
+                            "You list concise, well-known, true facts about a given topic. "
+                            "Output ONLY a numbered list, one short fact per line."
+                        ),
+                        user(
+                            f"List exactly 5 short, distinct, well-known facts about "
+                            f"{metas[i]['edit_new_target']}. Refer to it ONLY as 'it' - "
+                            "never write its name. Cover different aspects (e.g. origin "
+                            "or founder, time period, a notable person connected to it, "
+                            "what it is known for, a defining characteristic); at most "
+                            "ONE fact may be about its location or geography. Do not "
+                            f"mention {metas[i]['edit_subject']}"
+                            + (
+                                f" or {metas[i]['edit_old_target']}"
+                                if metas[i].get("edit_old_target") else ""
+                            )
+                            + ". Number them 1-5."
+                        ),
+                    ])
+                    for i in port_idx
+                ],
+                # Low temperature: these must be real facts, not creative ones
+                temperature=self.config.temperature_b,
+                max_completion_tokens=256,
+                modal_upstream_id=batch_id,
+                enable_thinking=False,
+            )
+            for i, resp in zip(port_idx, fact_resps.samples):
+                facts = (resp.text or "").strip()
+                if not facts:
+                    continue
+                # Leak guard: drop fact lines that name the edited subject or the
+                # old value (they would smuggle the answer / old fact into both
+                # bots' context).
+                banned = [
+                    b for b in (metas[i].get("edit_subject"), metas[i].get("edit_old_target"))
+                    if b
+                ]
+                kept_lines = [
+                    line for line in facts.splitlines()
+                    if line.strip() and not any(
+                        re.search(rf"\b{re.escape(b.lower())}\b", line.lower())
+                        for b in banned
+                    )
+                ]
+                if not kept_lines:
+                    continue
+                facts = "\n".join(kept_lines)
+                # Replace any remaining mentions of the value with "it": the
+                # first smoke showed Bot A parrots the value into the question
+                # (raw leak 9.6% -> 24.8%) when the block spells it out, so the
+                # value's name must appear only once in context - in the edited
+                # fact itself.
+                facts = re.sub(
+                    rf"\b{re.escape(metas[i]['edit_new_target'])}\b",
+                    "it",
+                    facts,
+                    flags=re.IGNORECASE,
+                )
+                contexts[i] = contexts[i] + (
+                    "\n\nWell-known background facts about the value in the "
+                    "information above (referred to as 'it'):\n" + facts
+                )
+                metas[i]["background_facts"] = facts
+            logger.info(
+                f"[batch={batch_id}] Portability background-fact listing for "
+                f"{len(port_idx)} samples took {time.time() - t0} seconds"
+            )
+        # --- end portability background facts ---
+
         # (3) Generate convos
         for round_idx in range(self.config.max_rounds):
 
