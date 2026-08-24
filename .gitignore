@@ -188,3 +188,6 @@ scratch/ryan/wandb
 secrets/
 
 ignore/
+
+# Third-party reference clone (upstream read-only, not vendored into this repo)
+knowledge-editing/GROM/
