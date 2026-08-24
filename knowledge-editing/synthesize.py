@@ -1,4 +1,5 @@
 import os
+import random
 from pathlib import Path
 
 import pydrantic
@@ -14,9 +15,20 @@ from cartridges.clients.tokasaurus import TokasaurusClient
 
 from cartridges.data.resources import KnowledgeEditingResource
 
+# Seeding the stdlib RNG makes the edit order, seed-type draws, persona picks and
+# portability fact anchors reproducible in aggregate across runs. NOTE: synthesis is
+# async with many batches in flight, so the interleaving of RNG consumption is not
+# deterministic and two runs are NOT bit-identical. It is enough for an A/B whose
+# metric is a per-seed-type rate over thousands of samples, which is what the
+# erased-vs-base teacher comparison measures.
+if os.environ.get("SYNTH_SEED"):
+    random.seed(int(os.environ["SYNTH_SEED"]))
+
+# TEACHER_MODEL lets the erase A/B point at a GROM-patched checkpoint. It must match
+# whatever tksrs was launched with (synth_clean.sbatch passes the same variable).
 client = TokasaurusClient.Config(
     url="http://localhost:10210",
-    model_name="Qwen/Qwen3-4b",
+    model_name=os.environ.get("TEACHER_MODEL", "Qwen/Qwen3-4b"),
 )
 
 config = SynthesizeConfig(
@@ -30,9 +42,12 @@ config = SynthesizeConfig(
         tools=[],
         resources=[
             KnowledgeEditingResource.Config(
-                path=os.path.join(
-                    os.environ["CARTRIDGES_DIR"],
-                    "knowledge-editing/samples/CounterFact.json"
+                # KE_DATA_FILE lets a run cover an edit SUBSET (e.g. the 50 edits
+                # erased from the teacher) instead of the full 975.
+                path=os.environ.get(
+                    "KE_DATA_FILE",
+                    os.path.join(os.environ["CARTRIDGES_DIR"],
+                                 "knowledge-editing/samples/CounterFact.json"),
                 ),
 
                 # Enrichment mix (Track A): 3 proven direct seeds + 2 new ones
