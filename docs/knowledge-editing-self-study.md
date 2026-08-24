@@ -29,7 +29,9 @@ flowchart LR
     TC[TokasaurusClient]
   end
   subgraph out [Outputs]
-    PQ[dataset.parquet]
+    PQ[dataset.parquet raw]
+    PQF[dataset_filtered.parquet]
+    PQN[dataset_final.parquet TRAINING FILE]
   end
   subgraph train [Training optional paths]
     LORA[lora_finetune.py]
@@ -43,8 +45,10 @@ flowchart LR
   KER --> SSS
   TC --> SSS
   SSS --> PQ
-  PQ --> LORA
-  PQ --> TRAIN
+  PQ -->|filter_dataset.py| PQF
+  PQF -->|fidelity_filter.py| PQN
+  PQN --> LORA
+  PQN --> TRAIN
   LORA --> LE
   TRAIN --> CE
 ```
@@ -52,7 +56,8 @@ flowchart LR
 1. **Data**: JSON list in CounterFact shape (see [CounterFact fields](#counterfact-json-synthesis-vs-evaluation)).
 2. **Synthesis**: [`KnowledgeEditingResource`](../cartridges/data/resources.py) loads facts and emits one shared **context** plus per-row **seed prompts** and **seed types**. [`SelfStudySynthesizer`](../cartridges/synthesizers/self_study.py) calls the **Tokasaurus** backend via [`TokasaurusClient`](../cartridges/clients/tokasaurus.py) to generate two-turn dialogs (user from Bot A, assistant from Bot B).
 3. **Output**: [`SynthesizeConfig`](../cartridges/synthesize.py) aggregates [`Conversation`](../cartridges/structs.py) objects and writes **parquet** (messages, metadata, optional top logprobs).
-4. **Training (primary path for your paper)**: [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) reads parquet and runs **PEFT LoRA** on a base Qwen model.
+3b. **Data cleaning (two stages, added 2026-07-15; never train on the raw parquet)**: [`filter_dataset.py`](../knowledge-editing/filter_dataset.py) repairs think-blocks and drops context-meta / portability-leak rows → `dataset_filtered.parquet`; then [`fidelity_filter.py`](../knowledge-editing/fidelity_filter.py) runs the LLM judge and drops targets that assert the pre-edit fact → **`dataset_final.parquet`, which is the file training reads**.
+4. **Training (primary path for your paper)**: [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) reads `dataset_final.parquet` and runs **PEFT LoRA** on a base Qwen model, with **assistant-only loss masking** and dynamic padding (added 2026-07-26; the prompt span is masked to `-100`).
 5. **Training (cartridge / KV path, deprioritized)**: [`legacy/train.py`](../knowledge-editing/legacy/train.py) can train a **cartridge** from parquet using [`TrainConfig`](../cartridges/train.py) and KV initializers; this parallels the original paper but is optional for LoRA-only comparisons.
 6. **Evaluation**: [`lora_eval.py`](../knowledge-editing/lora_eval.py) (local LoRA, primary) and [`legacy/comprehensive_eval.py`](../knowledge-editing/legacy/comprehensive_eval.py) (HTTP-served cartridge, deprioritized) implement multi-metric, AKEW-style splits.
 
@@ -110,15 +115,23 @@ Heuristic extraction of a **relation label** (e.g. “twin city”, “capital�
 
 Registered generators produce **English instructions for Bot A** (“generate a user message that …”), not the final user utterance. They are keyed by string names such as:
 
-| Seed type | Typical role |
-|-----------|----------------|
-| `question` | Ask for the **new** fact directly |
-| `negation` | Assert or ask about the **old** fact (assistant should deny per `NEGATION_SYSTEM_PROMPT`) |
-| `correction` | User insists on **old** fact; assistant aligns with **new** |
-| `derivative` | Follow-up questions about **new_target** and relation |
-| `creative` | Mapped to **`creative_ripple_seed_prompt`** — “ripple” / invalidated assumptions |
-| `ignorance` | User asks about **old** association; paired with refusal-style system prompts |
-| `strict` | Requests that must be refused **without** naming entities from context |
+| Seed type | Typical role | In the active mix? |
+|-----------|----------------|--------------------|
+| `question` | Ask for the **new** fact directly | **yes — weight 20** |
+| `negation` | Assert or ask about the **old** fact (assistant denies per `NEGATION_SYSTEM_PROMPT`) | **yes — weight 15** |
+| `correction` | User insists on **old** fact; assistant aligns with **new** | **yes — weight 15** |
+| `reciprocal` | Probe the edit in the **reverse** direction (from the new target back to the subject) | **yes — weight 20** |
+| `portability` | Multi-hop: compose the edit with a background fact about the new target (DCT-style, two-stage prompt) | **yes — weight 30** |
+| `derivative` | Follow-up questions about **new_target** and relation | no — scrapped as redundant |
+| `creative` | `creative_ripple_seed_prompt` — "ripple" / invalidated assumptions | no — scrapped, fidelity-risky |
+| `ignorance` | User asks about **old** association; paired with refusal-style prompts | no — scrapped (refusal) |
+| `strict` | Requests that must be refused **without** naming context entities | no — scrapped (refusal) |
+
+The **active mix is set in [`synthesize.py`](../knowledge-editing/synthesize.py)**:
+`seed_prompts=["question","negation","correction","reciprocal","portability"]` with
+`seed_weights=[20,15,15,20,30]` (relative; `random.choices` normalises). The scrapped
+generators are still registered in `SEED_PROMPT_REGISTRY` but are not sampled — see
+the enrichment rationale in [`CHANGELOG.md`](CHANGELOG.md).
 
 Legacy/generic types (`structuring`, `summarization`, `use_case`, `generic`) remain for other resources; the knowledge-editing path primarily uses the table above.
 
@@ -174,7 +187,14 @@ Optional **tool** branches (`use_tools_a`, `use_tools_b`) exist for the generic 
 | [`lora_eval.py`](../knowledge-editing/lora_eval.py) | **Primary eval**: multi-reference ROUGE/BERT, EM, old-target leakage, LLM judge, AKEW-style splits, for a **locally loaded** LoRA (default judge: vLLM server on port 10310). |
 | [`eval_common.py`](../knowledge-editing/eval_common.py) | Shared helpers: thinking stripping (incl. Qwen3 `<think>`), results paths, **`ask_judge_http`** with xgrammar-constrained JSON on vLLM, `judge_failed` semantics, `judge_aggregates`. |
 | [`judge_smoke_test.py`](../knowledge-editing/judge_smoke_test.py) | Judge reliability + calibration check; must PASS before full evals. |
-| [`slurm/serve_judge_vllm.sbatch`](../knowledge-editing/slurm/serve_judge_vllm.sbatch) | vLLM judge server job (port 10310); logs in `slurm/logs/`. |
+| [`filter_dataset.py`](../knowledge-editing/filter_dataset.py) | **Cleaning stage 1**: think-block repair, context-meta and portability-leak drops → `dataset_filtered.parquet` + a report JSON. |
+| [`fidelity_filter.py`](../knowledge-editing/fidelity_filter.py) | **Cleaning stage 2**: LLM judge drops targets asserting the pre-edit fact → `dataset_final.parquet`. Report carries `per_seed` and `per_seed_case` (per-edit) breakdowns. |
+| [`analyze_portability_hops.py`](../knowledge-editing/analyze_portability_hops.py) | Portability hop-diversity gate: hop buckets, background-fact coverage, target leaks, duplicates, fact-anchor spread. |
+| [`grom_erase.py`](../knowledge-editing/grom_erase.py) | GROM closed-form erase of pre-edit facts from the teacher **or** the student. `--dry-run` (CPU audit), `--attribution K` (layer band), `--dump-forget-subset`, `--no-save`, `--solve-device`. |
+| [`compare_fidelity.py`](../knowledge-editing/compare_fidelity.py) | A/B readout of two synthesis runs: per-seed `asserts_old` rates with an **edit-clustered** CI. |
+| [`summarize_grom_sweep.py`](../knowledge-editing/summarize_grom_sweep.py) | Collapses a GROM sweep into one promotion table (suppression / collateral / fluency). |
+| `slurm/*.sbatch` | `synth_clean` (tksrs + synthesize + filter), `fidelity_filter`, `lora_train_clean`, `eval`, `grom_erase`, `grom_sweep`, `grom_sweep_student`, `serve_judge_vllm`. Env overrides are documented in each file's header and in the [KE README](../knowledge-editing/README.md). |
+| [`slurm/serve_judge_vllm.sbatch`](../knowledge-editing/slurm/serve_judge_vllm.sbatch) | Standalone vLLM judge server (port 10310); logs in `slurm/logs/`. |
 | [`samples/dev_small.json`](../knowledge-editing/samples/dev_small.json) | 4-fact dev set (merged former `test{,2,3,4}.json`). |
 | [`legacy/comprehensive_eval.py`](../knowledge-editing/legacy/comprehensive_eval.py) | Cartridge/KV-path eval over HTTP (deprioritized). |
 | [`legacy/train.py`](../knowledge-editing/legacy/train.py) | **Cartridge / KV** training from parquet (deprioritized). |
@@ -199,25 +219,47 @@ For metric definitions and evaluation tips, see [`knowledge-editing/README.md`](
 
 ## Operational checklist
 
-1. **Environment**
-   - Set **`CARTRIDGES_DIR`** to the **cartridges repo root** (parent of `cartridges/` package and `examples/`).
-   - Set **`CARTRIDGES_OUTPUT_DIR`** (or rely on `output_dir` in config) for synthesis outputs.
+Everything below runs through Slurm in practice; the sbatch wrappers and their env
+overrides are listed in the [KE README](../knowledge-editing/README.md). Two rules that
+break jobs when forgotten: **never pass `--mem`** (nodes report `RealMemory=1`, any
+request fails) and **always pin `--gres=gpu:rtx5090:N`** for anything touching
+flashinfer/vLLM/tksrs — the venv's flashinfer is built for sm120 and the workers crash
+on the rtx4090 node with a misleading multiprocessing traceback.
 
-2. **Start Tokasaurus** on the host/port expected by [`TokasaurusClient`](../knowledge-editing/synthesize.py) (default `http://localhost:10210` in the example). Ensure the served **model id** matches `model_name` in the client config.
+1. **Environment**
+   - Set **`CARTRIDGES_DIR`** to the **cartridges repo root** (the parent of the
+     `cartridges/` package and of `knowledge-editing/`; the KE project moved out of
+     `examples/` to the repo root on 2026-07-15).
+   - Set **`CARTRIDGES_OUTPUT_DIR`** (or rely on `output_dir` in config) for synthesis
+     outputs.
+
+2. **Start Tokasaurus** on the host/port expected by [`TokasaurusClient`](../knowledge-editing/synthesize.py) (default `http://localhost:10210`). Ensure the served **model id** matches `model_name` in the client config — `slurm/synth_clean.sbatch` keeps them in sync via `TEACHER_MODEL`, and a mismatch is not merely cosmetic (see the thinking-mode failure recorded in [`CHANGELOG.md`](CHANGELOG.md)).
 
 3. **Generate data**
-   - Run [`synthesize.py`](../knowledge-editing/synthesize.py) (via `pydrantic` / project’s usual entrypoint).
-   - Collect **`artifact/dataset.parquet`** from the new run directory.
+   - Run [`synthesize.py`](../knowledge-editing/synthesize.py), or the whole
+     synthesize + filter chain via `slurm/synth_clean.sbatch`.
+   - Then run **both cleaning stages**: `filter_dataset.py` → `dataset_filtered.parquet`,
+     then `fidelity_filter.py` (needs the vLLM judge) → **`dataset_final.parquet`**.
+   - Collect **`artifact/dataset_final.parquet`** — *not* `dataset.parquet` and *not*
+     `dataset_filtered.parquet`.
 
 4. **Train**
-   - **LoRA**: run [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) with `--parquet-path` pointing at that artifact.
+   - **LoRA**: [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) with
+     `--parquet-path` pointing at `dataset_final.parquet`, or
+     `slurm/lora_train_clean.sbatch` with `DATA_FILE=` (required) and `BASE_MODEL=`
+     when starting from a non-stock base.
    - **Cartridge (optional, deprioritized)**: adjust paths in [`legacy/train.py`](../knowledge-editing/legacy/train.py) and run.
 
 5. **Evaluate**
-   - **LoRA locally**: [`lora_eval.py`](../knowledge-editing/lora_eval.py) with `--data-file` pointing at a JSON sample list.
-   - **HTTP / cartridge (deprioritized)**: [`legacy/comprehensive_eval.py`](../knowledge-editing/legacy/comprehensive_eval.py) with `--base-url` and model/cartridge ids as required.
+   - **LoRA locally**: [`lora_eval.py`](../knowledge-editing/lora_eval.py) with
+     `--data-file` pointing at a JSON sample list, or `slurm/eval.sbatch` (judge +
+     student in one 2-GPU job). If the adapter was trained on an edited base, pass the
+     **same** `BASE_MODEL` — otherwise it silently loads on the wrong weights.
+   - **HTTP / cartridge (deprioritized)**: [`legacy/comprehensive_eval.py`](../knowledge-editing/legacy/comprehensive_eval.py).
 
-6. **Comparisons** (e.g. AnyEdit): use the **same** JSON test files and the same eval scripts so metrics are comparable.
+6. **Comparisons** (e.g. AnyEdit): use the **same** JSON test files and the same eval
+   scripts so metrics are comparable. Pass `--seed 82` (the default) so the sampled
+   locality/portability questions are identical across checkpoints.
 
 ---
 
@@ -225,7 +267,7 @@ For metric definitions and evaluation tips, see [`knowledge-editing/README.md`](
 
 - **`comprehensive_eval.py`**: Model answers come from **`/custom/cartridge/chat/completions`** (cartridge-conditioned). The **LLM judge** uses **`/v1/chat/completions`** on a configurable **`--judge-base-url`** (default: same as **`--base-url`**) and **`--judge-model`**. The judge is **not** the cartridge KV cache, but if URL and model match the same backbone as your edited model, scores can still be **correlated**. For stronger claims, point **`--judge-base-url` / `--judge-model`** at a **separate** API or frozen baseline model.
 
-- **`lora_eval.py`**: Answers are generated with the **evaluated LoRA** weights. The **default** judge is **HTTP** (`ask_judge_http` in [`eval_common.py`](../knowledge-editing/eval_common.py)), same protocol as comprehensive eval, via **`--judge-base-url`** (default `http://localhost:10210`) and **`--judge-model`**. Using **`--judge-with-evaluated-model`** runs the **same LoRA** as judge (circular, can bias scores); that path is for **ablations only**.
+- **`lora_eval.py`**: Answers are generated with the **evaluated LoRA** weights. The **default** judge is **HTTP** (`ask_judge_http` in [`eval_common.py`](../knowledge-editing/eval_common.py)), same protocol as comprehensive eval, via **`--judge-base-url`** (CLI default **`http://localhost:10310`**, the vLLM judge from `slurm/serve_judge_vllm.sbatch`; note some in-file *function* signatures still default to 10210 — the CLI is what runs) and **`--judge-model`** (default `Qwen/Qwen3-4b`). Using **`--judge-with-evaluated-model`** runs the **same LoRA** as judge (circular, can bias scores); that path is for **ablations only**.
 
 - **Thinking / reasoning tags**: [`strip_thinking_artifacts`](../knowledge-editing/eval_common.py) removes common tags (Qwen-style `redacted_thinking` blocks, `thinking`, `reasoning`, `analysis`). Models may emit other formats; stripping is **best-effort**. If judge JSON parsing fails often, use **`--no-judge`** for metric-only runs or fix the judge endpoint / prompts.
 
@@ -238,9 +280,19 @@ For metric definitions and evaluation tips, see [`knowledge-editing/README.md`](
 
 ## Shared cluster and execution policy (Slurm, manual runs)
 
-This project is often used on a **shared cluster** with **Slurm**. **Automated execution** of long training or eval jobs (e.g. from CI or unattended agents) is **not** assumed and may be disallowed on your site.
+This project runs on a **shared cluster** with **Slurm**; the login node has no GPU.
 
-- **You** submit and run jobs: interactive GPU sessions, **`salloc`**, or **`sbatch`** scripts you maintain, following local module loads, partitions, and GPU policies.
+**Policy (set by Iraj 2026-07-15, supersedes the stricter wording this section used to
+carry):** an assistant **may** submit Slurm jobs (`sbatch`/`srun`/`scancel`) but **must
+ask before each submission** — approval for one job does not carry to the next.
+Login-node-only work (downloads, venv setup, CPU scripts, dry-runs, HTTP smoke tests)
+needs no per-action approval. Long jobs are watched by Iraj, who reports back; do not
+poll them.
+
+- Python env: repo-local `.venv` (Python 3.12) managed with **uv** — install with
+  `uv pip install`, never plain `pip` inside the venv. The vLLM judge has its own
+  `.venv-vllm`.
+- All job logs are plain `slurm/logs/%j.log` (no name prefix).
 
 - Before **`comprehensive_eval.py`** or **`lora_eval.py`**, ensure **Tokasaurus** (or whatever serves **`/v1/chat/completions`** for the judge) is reachable from the node where you run the script—often the same allocation as the eval client, or a host/port exposed per cluster policy.
 
@@ -250,6 +302,8 @@ This project is often used on a **shared cluster** with **Slurm**. **Automated e
 
 ## Related documentation
 
+- [`docs/CHANGELOG.md`](CHANGELOG.md) — **dated engineering log, newest first: what changed, when, and what it measured. Start here when resuming.**
+- [`docs/project-progress-2026.md`](project-progress-2026.md) — narrative progress log with the full result tables.
 - [`docs/README.md`](README.md) — index of docs in this folder.
 - [`knowledge-editing/README.md`](../knowledge-editing/README.md) — pipeline overview, commands, and file map.
 - [`docs/training.md`](training.md) — training worklist / agent notes.
