@@ -153,10 +153,18 @@ def main():
     dropped = n - sum(keep_mask)
     failed = sum(1 for r in results if r.get("judge_failed"))
     per_seed: dict = {}
+    # Also keyed by edit so a downstream A/B can cluster its confidence interval by
+    # edit instead of by row. Rows from one edit are strongly correlated (the same
+    # fact, re-asked many ways), so a row-level CI is over-optimistic -- badly so on
+    # a small-edit run like the Step 3e erase A/B (50 edits, thousands of rows).
+    per_seed_case: dict = {}
     for (_, row), res in zip(df.iterrows(), results):
         st = row["metadata"].get("seed_type", "?")
         bucket = per_seed.setdefault(st, {"kept": 0, "dropped": 0})
         bucket["dropped" if res["drop"] else "kept"] += 1
+        case = str(row["metadata"].get("case_id", "?"))
+        cb = per_seed_case.setdefault(st, {}).setdefault(case, {"kept": 0, "dropped": 0})
+        cb["dropped" if res["drop"] else "kept"] += 1
 
     print(f"\nKept {n - dropped}/{n} rows ({100 * (n - dropped) / n:.1f}%); "
           f"dropped {dropped} edit-fidelity failures; {failed} judge failures (kept, see report)")
@@ -176,6 +184,7 @@ def main():
         "dropped_fidelity": dropped,
         "judge_failures_kept": failed,
         "per_seed": per_seed,
+        "per_seed_case": per_seed_case,
         "judge_model": args.judge_model,
         "judge_base_url": args.judge_base_url,
     }
