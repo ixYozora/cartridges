@@ -16,6 +16,29 @@ MODEL_TO_THINKING_OVERRIDES = {
     "qwen/qwen3-8b": lambda enable_thinking: dict(enable_thinking=enable_thinking),
 }
 
+
+def thinking_overrides_for(model_name: str, enable_thinking: bool):
+    """Chat-template thinking kwargs for a model NAME or a local checkpoint PATH.
+
+    MODEL_TO_THINKING_OVERRIDES is keyed by hub id, so a local path (a GROM-erased
+    teacher, a merged adapter, any renamed copy) misses the lookup. That miss is
+    silent and expensive: Qwen3's chat template DEFAULTS TO THINKING MODE, so a run
+    that asked for enable_thinking=False gets <think> blocks in every response
+    instead. Job 11150 lost a full synthesis arm to exactly this.
+
+    Falls back to matching the model family inside the path
+    ("checkpoints/qwen3-4b-erased-n50-s1" -> "qwen3-4b"). Returns None if the model
+    is genuinely unknown, which is the caller's signal to use its own fallback.
+    """
+    key = (model_name or "").lower()
+    if key in MODEL_TO_THINKING_OVERRIDES:
+        return MODEL_TO_THINKING_OVERRIDES[key](enable_thinking)
+    for known, builder in MODEL_TO_THINKING_OVERRIDES.items():
+        if known.split("/")[-1] in key:      # e.g. "qwen3-4b" in the path
+            return builder(enable_thinking)
+    return None
+
+
 DEFAULT_COT = "Think before responding. Put your chain of thought/scratchpad between the <think> and </think> tags before providing your final response."
 
 COT_INSTRUCTIONS = [

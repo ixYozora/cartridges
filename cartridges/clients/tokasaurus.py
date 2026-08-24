@@ -20,7 +20,9 @@ from cartridges.clients.base import (
 )
 from cartridges.clients.usage import Usage
 from cartridges.utils import get_logger
-from cartridges.utils.thinking import MODEL_TO_THINKING_OVERRIDES, add_thinking_prompt
+from cartridges.utils.thinking import (MODEL_TO_THINKING_OVERRIDES,
+                                       add_thinking_prompt,
+                                       thinking_overrides_for)
 
 
 logger = get_logger(__name__)
@@ -201,10 +203,11 @@ class TokasaurusClient(Client):
         t0 = time.time()
         logger.info(f"[batch={modal_upstream_id}] Sending batch chat request")
 
-        if self.config.model_name.lower() in MODEL_TO_THINKING_OVERRIDES:
-            # this provides the kwargs needed for the apply_chat_template to enable
-            # thinking. 
-            thinking_overrides = MODEL_TO_THINKING_OVERRIDES[self.config.model_name.lower()](enable_thinking)
+        resolved_overrides = thinking_overrides_for(self.config.model_name, enable_thinking)
+        if resolved_overrides is not None:
+            # kwargs for apply_chat_template that turn thinking on/off. Resolves
+            # local checkpoint paths too, not just hub ids -- see thinking_overrides_for.
+            thinking_overrides = resolved_overrides
         elif enable_thinking:
             # if the model is not in the MODEL_TO_THINKING_OVERRIDES, we add a
             # thinking prompt to the last message of the chat. 
@@ -212,6 +215,14 @@ class TokasaurusClient(Client):
             for chat in chats:
                 chat[-1]["content"] = add_thinking_prompt(chat[-1]["content"])
         else:
+            if not enable_thinking:
+                logger.warning(
+                    f"No thinking-template override known for model "
+                    f"{self.config.model_name!r}; enable_thinking=False will NOT be "
+                    f"forwarded to the chat template. If this is a Qwen3 model the "
+                    f"template defaults to THINKING MODE and every response will "
+                    f"carry a <think> block."
+                )
             thinking_overrides = {}
 
 
