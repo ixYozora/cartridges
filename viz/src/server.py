@@ -308,78 +308,125 @@ def get_dataset_info(dataset_path: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/dataset/{dataset_path:path}/seed-types")
+def get_dataset_seed_types(dataset_path: str):
+    """Return the distinct metadata.seed_type values and their counts.
+
+    Used by the frontend to render the seed-type filter chips so the whole
+    dataset can be browsed by seed category without paging through everything.
+    """
+    try:
+        import urllib.parse
+        dataset_path = urllib.parse.unquote(dataset_path)
+
+        if not os.path.exists(dataset_path):
+            raise HTTPException(status_code=404, detail="Dataset not found")
+
+        examples = load_dataset(dataset_path)
+        counts: Dict[str, int] = {}
+        for example in examples:
+            metadata = getattr(example, 'metadata', None) or {}
+            seed_type = metadata.get('seed_type') or 'unknown'
+            counts[seed_type] = counts.get(seed_type, 0) + 1
+
+        # Sort by count (desc) then name so the busiest categories come first.
+        seed_types = [
+            {'name': name, 'count': count}
+            for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+
+        return {'seed_types': seed_types, 'total': len(examples)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _apply_filters(
+    examples,
+    seed_type=None,
+    search=None,
+    search_messages=True,
+    search_system_prompt=True,
+    search_metadata=True,
+):
+    """Apply the seed-type + text-search filters.
+
+    Used by both the paged grid endpoint and the single-example lookup so that
+    an example index means the same thing in both — otherwise clicking a card
+    while a filter is active opens the wrong (unfiltered) sample.
+    """
+    # Seed-type filter
+    if seed_type and str(seed_type).strip() and str(seed_type).strip().lower() != 'all':
+        wanted_seed = str(seed_type).strip()
+        examples = [
+            e for e in examples
+            if (getattr(e, 'metadata', None) or {}).get('seed_type') == wanted_seed
+        ]
+
+    # Text-search filter
+    if search and str(search).strip():
+        query = str(search).strip().lower()
+        filtered = []
+        for e in examples:
+            matches = []
+            if search_messages:
+                matches.append(any(query in (m.content or '').lower() for m in e.messages))
+            if search_system_prompt:
+                matches.append(bool(e.system_prompt) and query in e.system_prompt.lower())
+            if search_metadata:
+                matches.append(
+                    bool(e.metadata) and any(query in str(v).lower() for v in e.metadata.values())
+                )
+            if any(matches):
+                filtered.append(e)
+        examples = filtered
+
+    return examples
+
 @app.get("/api/dataset/{dataset_path:path}")
 def get_dataset_page(
-    dataset_path: str, 
+    dataset_path: str,
     page: int = Query(0), 
     page_size: int = Query(12),
     search: Optional[str] = Query(None),
     search_messages: Optional[str] = Query('true'),
     search_system_prompt: Optional[str] = Query('false'),
-    search_metadata: Optional[str] = Query('false')
+    search_metadata: Optional[str] = Query('false'),
+    seed_type: Optional[str] = Query(None)
 ):
     """Load and return a specific page of a dataset with optional search."""
     try:
         # Decode the path
         import urllib.parse
         dataset_path = urllib.parse.unquote(dataset_path)
-        
+
         if not os.path.exists(dataset_path):
             raise HTTPException(status_code=404, detail="Dataset not found")
-        
+
         # Convert search field parameters to booleans
         search_messages_bool = search_messages and search_messages.lower() == 'true'
         search_system_prompt_bool = search_system_prompt and search_system_prompt.lower() == 'true'
         search_metadata_bool = search_metadata and search_metadata.lower() == 'true'
         print(f"Search fields - messages: {search_messages_bool}, system_prompt: {search_system_prompt_bool}, metadata: {search_metadata_bool}")
-        
+
         # Load all examples
         t0 = time.time()
         examples = load_dataset(dataset_path)
         print(f"Loaded dataset in {time.time() - t0} seconds")
-        
-        # Apply search filter if provided
-        if search and search.strip():
-            t0 = time.time()
-            search_query = search.strip().lower()
-            filtered_examples = []
-            
-            for example in examples:
-                matches = []
-                
-                # Search in message contents (if enabled)
-                if search_messages_bool:
-                    message_match = any(
-                        search_query in msg.content.lower() 
-                        for msg in example.messages
-                    )
-                    matches.append(message_match)
-                
-                # Search in system prompt (if enabled)
-                if search_system_prompt_bool:
-                    system_prompt_match = (
-                        example.system_prompt and 
-                        search_query in example.system_prompt.lower()
-                    )
-                    matches.append(system_prompt_match)
-                
-                # Search in metadata (if enabled)
-                if search_metadata_bool:
-                    metadata_match = False
-                    if example.metadata:
-                        metadata_match = any(
-                            search_query in str(value).lower() 
-                            for value in example.metadata.values()
-                        )
-                    matches.append(metadata_match)
-                
-                # Include example if any enabled field matches
-                if any(matches):
-                    filtered_examples.append(example)
-            
-            examples = filtered_examples
-            print(f"Filtered {len(examples)} examples in {time.time() - t0} seconds")
-        
+
+        # Apply seed-type + search filters (shared with the single-example lookup)
+        t0 = time.time()
+        examples = _apply_filters(
+            examples,
+            seed_type=seed_type,
+            search=search,
+            search_messages=search_messages_bool,
+            search_system_prompt=search_system_prompt_bool,
+            search_metadata=search_metadata_bool,
+        )
+        print(f"Filtered to {len(examples)} examples in {time.time() - t0} seconds")
+
         total_count = len(examples)
         
         # Calculate pagination
@@ -429,13 +476,30 @@ def get_dataset_example_with_logprobs(request: Dict[str, Any]):
                 
         if not os.path.exists(dataset_path):
             raise HTTPException(status_code=404, detail="Dataset not found")
-        
+
         # Load the examples
         examples = load_dataset(dataset_path)
-        
+
+        # Apply the same filters as the grid so example_index refers to the same
+        # (filtered) list the user is looking at — otherwise a filtered click
+        # would open the wrong sample from the full dataset.
+        def _as_bool(v, default=True):
+            if v is None:
+                return default
+            return str(v).lower() == 'true'
+
+        examples = _apply_filters(
+            examples,
+            seed_type=request.get('seed_type'),
+            search=request.get('search'),
+            search_messages=_as_bool(request.get('search_messages')),
+            search_system_prompt=_as_bool(request.get('search_system_prompt')),
+            search_metadata=_as_bool(request.get('search_metadata')),
+        )
+
         if example_index < 0 or example_index >= len(examples):
-            raise HTTPException(status_code=404, detail=f"Example index {example_index} not found (dataset has {len(examples)} examples)")
-        
+            raise HTTPException(status_code=404, detail=f"Example index {example_index} not found (filtered dataset has {len(examples)} examples)")
+
         example = examples[example_index]
         serialized_example = serialize_training_example(example, include_logprobs=True, tokenizer=tokenizer)
         

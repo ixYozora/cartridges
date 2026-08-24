@@ -1,6 +1,18 @@
 import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 
+// Per-seed-type badge colors (self-study seed categories). Unknown/other
+// seeds fall back to grey so any dataset renders sensibly.
+const SEED_COLORS = {
+  question: 'bg-blue-100 text-blue-700 border-blue-200',
+  negation: 'bg-rose-100 text-rose-700 border-rose-200',
+  correction: 'bg-amber-100 text-amber-700 border-amber-200',
+  reciprocal: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  portability: 'bg-purple-100 text-purple-700 border-purple-200',
+}
+const seedBadgeClass = (name) =>
+  SEED_COLORS[name] || 'bg-gray-100 text-gray-600 border-gray-200'
+
 function DatasetsPage() {
   const [datasets, setDatasets] = useState([])
   const [selectedDataset, setSelectedDataset] = useState(null)
@@ -23,11 +35,8 @@ function DatasetsPage() {
   const [configData, setConfigData] = useState(null)
   const [loadingDatasets, setLoadingDatasets] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchFields, setSearchFields] = useState({
-    messages: true,
-    system_prompt: false,
-    metadata: false
-  })
+  const [seedTypes, setSeedTypes] = useState([])
+  const [selectedSeedType, setSelectedSeedType] = useState('all')
   const [isScrolled, setIsScrolled] = useState(false)
   const [copySuccess, setCopySuccess] = useState({})
   const [collapsedMessages, setCollapsedMessages] = useState({})
@@ -129,6 +138,8 @@ function DatasetsPage() {
     setLoadingDatasetPath(datasetPath)
     setDatasetError(null)
     setConfigData(null)
+    setSelectedSeedType('all')
+    setSeedTypes([])
     
     try {
       // First, load dataset metadata quickly
@@ -136,9 +147,10 @@ function DatasetsPage() {
       const info = await infoResponse.json()
       setTotalExamples(info.total_count)
       
-      // Reset search and load the first page of examples
+      // Reset search / seed filter, load seed-type facets, then the first page
       setSearchQuery('')
-      await loadDatasetWithSearch(0, datasetPath)
+      fetchSeedTypes(datasetPath)
+      await loadDatasetWithSearch(0, datasetPath, 'all')
       
       // Also automatically load the config
       try {
@@ -168,21 +180,27 @@ function DatasetsPage() {
     }
   }
 
-  const loadDatasetWithSearch = async (page = currentPage, datasetPath = null) => {
+  const loadDatasetWithSearch = async (page = currentPage, datasetPath = null, seedTypeOverride = null) => {
     const dataset = datasetPath || selectedDataset
     if (!dataset) return
 
+    // Use the override when provided so freshly-clicked filters don't read stale state.
+    const seedFilter = seedTypeOverride !== null ? seedTypeOverride : selectedSeedType
+
     setLoadingDatasetPath(dataset)
     setDatasetError(null)
-    
+
     try {
+      // Search always runs server-side across all fields (messages, system prompt,
+      // metadata) so typing a subject/target name finds it too.
       const searchParams = new URLSearchParams({
         page: page.toString(),
         page_size: examplesPerPage.toString(),
         search: searchQuery || '',
-        search_messages: searchFields.messages.toString(),
-        search_system_prompt: searchFields.system_prompt.toString(),
-        search_metadata: searchFields.metadata.toString()
+        search_messages: 'true',
+        search_system_prompt: 'true',
+        search_metadata: 'true',
+        seed_type: seedFilter || 'all'
       })
 
       const response = await fetch(`/api/dataset/${encodeURIComponent(dataset)}?${searchParams}`)
@@ -202,6 +220,32 @@ function DatasetsPage() {
   const handleSearch = () => {
     setCurrentPage(0)
     loadDatasetWithSearch(0)
+  }
+
+  const clearSearch = () => {
+    setSearchQuery('')
+    setCurrentPage(0)
+    loadDatasetWithSearch(0, null, selectedSeedType)
+  }
+
+  // Fetch the distinct seed types (with counts) for the whole dataset.
+  const fetchSeedTypes = async (datasetPath) => {
+    try {
+      const response = await fetch(`/api/dataset/${encodeURIComponent(datasetPath)}/seed-types`)
+      const data = await response.json()
+      setSeedTypes(data.seed_types || [])
+    } catch (error) {
+      console.error('Failed to load seed types:', error)
+      setSeedTypes([])
+    }
+  }
+
+  // Filter the grid by a seed type (or 'all'). Resets to the first page.
+  const handleSeedFilter = (seedType) => {
+    setSelectedSeedType(seedType)
+    setCurrentPage(0)
+    setSelectedExample(null)
+    loadDatasetWithSearch(0, null, seedType)
   }
 
   const handleCopyContent = (content, messageIndex) => {
@@ -243,7 +287,13 @@ function DatasetsPage() {
         },
         body: JSON.stringify({
           dataset_path: selectedDataset,
-          example_index: exampleIndex
+          example_index: exampleIndex,
+          // Send the active filter context so the index matches the filtered grid.
+          seed_type: selectedSeedType || 'all',
+          search: searchQuery || '',
+          search_messages: 'true',
+          search_system_prompt: 'true',
+          search_metadata: 'true'
         }),
         signal: abortController.signal
       })
@@ -517,16 +567,10 @@ function DatasetsPage() {
     )
   }
 
-  // Filter examples based on search
-  const filteredExamples = examples.filter(example => {
-    if (!searchQuery.trim()) return true
-    
-    const query = searchQuery.toLowerCase()
-    return example.messages.some(msg => 
-      msg.content.toLowerCase().includes(query)
-    )
-  })
-
+  // Total across seed facets, used for the "All" chip count.
+  const totalSeedCount = seedTypes.reduce((sum, s) => sum + (s.count || 0), 0)
+  // Only show the seed filter bar when the dataset actually carries seed types.
+  const hasSeeds = seedTypes.some(s => s.name && s.name !== 'unknown')
 
   return (
     <>
@@ -620,12 +664,12 @@ function DatasetsPage() {
           <>
             {/* Search and Filter Controls */}
             <div className="bg-white p-4 border-b border-gray-200">
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3">
                 {/* Search Input */}
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    placeholder="Search examples..."
+                    placeholder="Search messages, system prompt, subject or target…"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="flex-1 p-2 border border-gray-300 rounded text-sm"
@@ -641,44 +685,57 @@ function DatasetsPage() {
                   >
                     Search
                   </button>
+                  {searchQuery && (
+                    <button
+                      onClick={clearSearch}
+                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-700 text-sm rounded transition-colors"
+                    >
+                      Clear
+                    </button>
+                  )}
                 </div>
 
-                {/* Search Field Checkboxes */}
-                <div className="flex gap-4 text-sm">
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={searchFields.messages}
-                      onChange={(e) => setSearchFields({...searchFields, messages: e.target.checked})}
-                    />
-                    Messages
-                  </label>
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={searchFields.system_prompt}
-                      onChange={(e) => setSearchFields({...searchFields, system_prompt: e.target.checked})}
-                    />
-                    System Prompt
-                  </label>
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={searchFields.metadata}
-                      onChange={(e) => setSearchFields({...searchFields, metadata: e.target.checked})}
-                    />
-                    Metadata
-                  </label>
-                </div>
+                {/* Seed-type Filter Chips */}
+                {hasSeeds && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide mr-1">
+                      Seed type
+                    </span>
+                    <button
+                      onClick={() => handleSeedFilter('all')}
+                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                        selectedSeedType === 'all'
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      All ({totalSeedCount})
+                    </button>
+                    {seedTypes.map((s) => (
+                      <button
+                        key={s.name}
+                        onClick={() => handleSeedFilter(s.name)}
+                        className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                          selectedSeedType === s.name
+                            ? 'bg-purple-600 text-white border-purple-600'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        {s.name} ({s.count})
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {/* Dataset Info */}
                 <div className="text-sm text-gray-600">
                   <strong>{selectedDataset.split('/').pop()}</strong>
-                  {searchQuery && (
-                    <span> - Showing {totalExamples} results for "{searchQuery}"</span>
+                  <span> — {totalExamples} {searchQuery || selectedSeedType !== 'all' ? 'matching' : 'total'} example{totalExamples === 1 ? '' : 's'}</span>
+                  {selectedSeedType !== 'all' && (
+                    <span> · seed: <strong>{selectedSeedType}</strong></span>
                   )}
-                  {!searchQuery && (
-                    <span> - {totalExamples} total examples</span>
+                  {searchQuery && (
+                    <span> · search: "{searchQuery}"</span>
                   )}
                 </div>
               </div>
@@ -711,10 +768,10 @@ function DatasetsPage() {
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
                   <p>Loading examples...</p>
                 </div>
-              ) : filteredExamples.length > 0 ? (
+              ) : examples.length > 0 ? (
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 w-full">
-                    {filteredExamples.map((example, index) => (
+                    {examples.map((example, index) => (
                       <div
                         key={index}
                         className="border border-gray-300 rounded-lg p-4 cursor-pointer transition-all hover:-translate-y-1 hover:shadow-lg"
@@ -734,8 +791,15 @@ function DatasetsPage() {
                           }
                         }}
                       >
-                        <div className="text-sm text-gray-600 mb-2">
-                          Example {(currentPage * examplesPerPage) + index + 1}
+                        <div className="flex items-center justify-between mb-2 gap-2">
+                          <div className="text-sm text-gray-600">
+                            Example {(currentPage * examplesPerPage) + index + 1}
+                          </div>
+                          {example.metadata?.seed_type && (
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${seedBadgeClass(example.metadata.seed_type)}`}>
+                              {example.metadata.seed_type}
+                            </span>
+                          )}
                         </div>
                         <div className="text-xs text-gray-500 leading-relaxed space-y-1">
                           {example.system_prompt && (
@@ -789,7 +853,9 @@ function DatasetsPage() {
                 </>
               ) : (
                 <div className="text-center text-gray-500 py-12">
-                  {searchQuery ? `No examples found for "${searchQuery}"` : 'No examples found in this dataset.'}
+                  {searchQuery || selectedSeedType !== 'all'
+                    ? `No examples match ${searchQuery ? `"${searchQuery}"` : ''}${searchQuery && selectedSeedType !== 'all' ? ' with ' : ''}${selectedSeedType !== 'all' ? `seed "${selectedSeedType}"` : ''}.`
+                    : 'No examples found in this dataset.'}
                 </div>
               )}
             </div>
@@ -814,8 +880,15 @@ function DatasetsPage() {
                 >
                   ← Back to Examples
                 </button>
-                <div className="text-sm text-gray-600">
-                  <strong>{selectedDataset.split('/').pop()}</strong> - Example {examples.findIndex(ex => ex === selectedExample) + 1 + (currentPage * examplesPerPage)} of {totalExamples}
+                <div className="text-sm text-gray-600 flex items-center gap-2">
+                  <span>
+                    <strong>{selectedDataset.split('/').pop()}</strong> - Example {examples.findIndex(ex => ex === selectedExample) + 1 + (currentPage * examplesPerPage)} of {totalExamples}
+                  </span>
+                  {selectedExample.metadata?.seed_type && (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${seedBadgeClass(selectedExample.metadata.seed_type)}`}>
+                      {selectedExample.metadata.seed_type}
+                    </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2">
