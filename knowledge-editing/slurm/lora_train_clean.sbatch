@@ -20,14 +20,20 @@ set -euo pipefail
 REPO=/home/imasoudian/cartridges
 export WANDB_MODE=offline
 
+# BASE_MODEL lets the run start from a GROM-erased student ("MU first, then FT")
+# instead of the stock checkpoint. The eval must then be given the SAME base.
+echo "base model: ${BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+
 STAMP=$(date +%Y%m%d_%H%M%S)
-OUTPUT_DIR=$REPO/checkpoints/lora_qwen2.5-7B-Instruct-$STAMP
+# OUTPUT_DIR override so a follow-on eval job can be chained at submit time
+# (the datetime stamp is otherwise unknowable until the job runs).
+OUTPUT_DIR=${OUTPUT_DIR:-$REPO/checkpoints/lora_qwen2.5-7B-Instruct-$STAMP}
 
 cd $REPO/knowledge-editing
 exec $REPO/.venv/bin/python lora_finetune.py \
     --parquet-path "${DATA_FILE:?must be set, e.g. --export=ALL,DATA_FILE=<path/to/dataset_final.parquet>}" \
     --output-dir "$OUTPUT_DIR" \
-    --model-name Qwen/Qwen2.5-7B-Instruct \
+    --model-name "${BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}" \
     --lora-r 64 \
     --lora-alpha 256 \
     --lora-dropout 0.05 \

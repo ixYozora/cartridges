@@ -22,6 +22,8 @@ KE=$REPO/knowledge-editing
 JUDGE_PORT=10310
 JUDGE_URL=http://localhost:$JUDGE_PORT
 LORA_DIR=${LORA_DIR:-$REPO/checkpoints/lora_qwen2.5-7B-Instruct}
+# Must match the base the adapter was trained on (see lora_train_clean.sbatch).
+BASE_MODEL=${BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}
 DATA_FILE=${DATA_FILE:-samples/dev_small.json}
 
 # Slurm hands us 2 GPUs; split them between judge and student model.
@@ -56,7 +58,7 @@ echo "Smoke test PASSED — starting eval."
 echo "Evaluating adapter: $LORA_DIR on $DATA_FILE"
 CUDA_VISIBLE_DEVICES=$EVAL_GPU $REPO/.venv/bin/python lora_eval.py \
     --lora-dir "$LORA_DIR" \
-    --base-model Qwen/Qwen2.5-7B-Instruct \
+    --base-model "${BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}" \
     --data-file "$DATA_FILE" \
     --judge-base-url $JUDGE_URL
 
