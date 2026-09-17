@@ -12,6 +12,7 @@ from cartridges.synthesizers.self_study import SelfStudySynthesizer
 from cartridges.utils.wandb import WandBConfig
 from cartridges.data.resources import TextFileResource
 from cartridges.clients.tokasaurus import TokasaurusClient
+from cartridges.clients.openai import OpenAIClient
 
 from cartridges.data.resources import KnowledgeEditingResource
 
@@ -25,11 +26,41 @@ if os.environ.get("SYNTH_SEED"):
     random.seed(int(os.environ["SYNTH_SEED"]))
 
 # TEACHER_MODEL lets the erase A/B point at a GROM-patched checkpoint. It must match
-# whatever tksrs was launched with (synth_clean.sbatch passes the same variable).
-client = TokasaurusClient.Config(
-    url="http://localhost:10210",
-    model_name=os.environ.get("TEACHER_MODEL", "Qwen/Qwen3-4b"),
-)
+# whatever the server was launched with (the sbatch exports the same variable).
+TEACHER_MODEL = os.environ.get("TEACHER_MODEL", "Qwen/Qwen3-4b")
+SYNTH_PORT = os.environ.get("SYNTH_PORT", "10210")
+
+# SYNTH_ENGINE picks the serving backend; unset == tokasaurus == unchanged behaviour.
+#   tokasaurus  slurm/synth_clean.sbatch  (default; custom packed-logprob batch API)
+#   vllm        slurm/synth_vllm.sbatch   (OpenAI-compatible; the only option for a
+#                                          teacher tksrs cannot serve -- its fork
+#                                          implements dense llama/qwen2/qwen3 only,
+#                                          so no MoE or hybrid attention)
+# The SynthesizeConfig below is deliberately SHARED by both engines rather than
+# duplicated into a second entrypoint: the seed mix and sample count are what an A/B
+# holds fixed, and two copies of them is how an arm silently drifts.
+SYNTH_ENGINE = os.environ.get("SYNTH_ENGINE", "tokasaurus").lower()
+
+if SYNTH_ENGINE == "tokasaurus":
+    client = TokasaurusClient.Config(
+        url=f"http://localhost:{SYNTH_PORT}",
+        model_name=TEACHER_MODEL,
+    )
+elif SYNTH_ENGINE == "vllm":
+    # OpenAIClient forwards enable_thinking as chat_template_kwargs whenever base_url
+    # is set, with no model-name lookup -- so this path cannot hit the hub-id-vs-local
+    # -path bug that silently re-enabled thinking in job 11150 (see
+    # cartridges/utils/thinking.py). api_key is unused by vLLM but the SDK refuses to
+    # construct a client without one.
+    client = OpenAIClient.Config(
+        model_name=TEACHER_MODEL,
+        base_url=f"http://localhost:{SYNTH_PORT}/v1",
+        api_key="EMPTY",
+    )
+else:
+    raise ValueError(
+        f"SYNTH_ENGINE must be 'tokasaurus' or 'vllm', got {SYNTH_ENGINE!r}"
+    )
 
 config = SynthesizeConfig(
 
