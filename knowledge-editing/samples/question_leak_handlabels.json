@@ -1,0 +1,812 @@
+[
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 1,
+  "case_id": "530",
+  "subject": "Kemira",
+  "question": "What is the name of the city where the headquarters of Kemira is located, which became a major center for the fur trade in the 19th century?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 2,
+  "case_id": "683",
+  "subject": "The Red Sea Sharks",
+  "question": "How many people speak the language of The Red Sea Sharks as their first language?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 3,
+  "case_id": "1006",
+  "subject": "Jonathan Goff",
+  "question": "What is the typical placement of the position that Jonathan Goff plays in relation to other players on the field?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 4,
+  "case_id": "1611",
+  "subject": "Joe Torre",
+  "question": "What is the year the sport associated with Joe Torre's position was first played?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 5,
+  "case_id": "94",
+  "subject": "Flotation Toy Warning",
+  "question": "What is the historical period during which the city associated with Flotation Toy Warning's origins was established?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 6,
+  "case_id": "1723",
+  "subject": "Arjeplog Municipality",
+  "question": "How does the widespread use of the language with over 300 million speakers impact the cultural exchange opportunities in Arjeplog Municipality?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 7,
+  "case_id": "1319",
+  "subject": "Core 2",
+  "question": "Who is the founder of the company that developed the Core 2 processor?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 8,
+  "case_id": "432",
+  "subject": "Planet of the Apes",
+  "question": "How did the use of a language that was widely used during the Renaissance contribute to the film Planet of the Apes' ability to convey complex ideas and themes to a broad audience?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 9,
+  "case_id": "150",
+  "subject": "Mark Isham",
+  "question": "What is a common location where Mark Isham's playing is often showcased?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 10,
+  "case_id": "179",
+  "subject": "Tullio De Mauro",
+  "question": "Why is the location where Tullio De Mauro began his career significant for its musical heritage?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 11,
+  "case_id": "1065",
+  "subject": "Deng Gai",
+  "question": "Which country is associated with the 1958 FIFA World Cup final that was held in a location where Deng Gai has citizenship?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 12,
+  "case_id": "336",
+  "subject": "Suvorov Glacier",
+  "question": "Which continent is home to the world's highest mountain peak, and where is Suvorov Glacier located?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 13,
+  "case_id": "1669",
+  "subject": "Ze'ev Jabotinsky",
+  "question": "What is the historical period during which the language that Ze'ev Jabotinsky primarily used was standardized?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 14,
+  "case_id": "914",
+  "subject": "Gary Carter",
+  "question": "What is the most physically demanding aspect of the game that Gary Carter's skills exemplified?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 15,
+  "case_id": "1060",
+  "subject": "Giovanni Battista Grassi",
+  "question": "Which city, known for being home to one of the largest underground railway systems in the world, did Giovanni Battista Grassi contribute to through his work in parasitology?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 16,
+  "case_id": "313",
+  "subject": "Pedro de Ribera",
+  "question": "What major city, known for its historic landmarks like Big Ben, was the place where Pedro de Ribera passed away?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 17,
+  "case_id": "460",
+  "subject": "Ralph Lyford",
+  "question": "Why does Ralph Lyford's music have a lasting influence on different types of music around the world?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 18,
+  "case_id": "73",
+  "subject": "Lee Alvin DuBridge",
+  "question": "What role did Lee Alvin DuBridge's area of expertise play in the locations where international organizations operate?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 19,
+  "case_id": "1024",
+  "subject": "Garth Knox",
+  "question": "Why did the city where Garth Knox was born have a significant historical role as a key trading point on a major river?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 20,
+  "case_id": "1376",
+  "subject": "Corrado Segre",
+  "question": "Why is the language that Corrado Segre used known for being spoken by over 250 million people as a first or second language?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 21,
+  "case_id": "1026",
+  "subject": "Co-operative Commonwealth Federation (Ontario Section)",
+  "question": "What is known about the cultural scene of the place where the Co-operative Commonwealth Federation (Ontario Section) is based?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 22,
+  "case_id": "294",
+  "subject": "Mobiloil Inlet",
+  "question": "Which famous cultural and intellectual movement originated in the region that Mobiloil Inlet is located within?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 23,
+  "case_id": "41",
+  "subject": "Mahmoud Fawzi",
+  "question": "What notable figures has Mahmoud Fawzi been associated with through his citizenship?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 24,
+  "case_id": "267",
+  "subject": "Xerox",
+  "question": "What is known about the location of Xerox's headquarters that is on the southern coast of Florida?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 25,
+  "case_id": "1976",
+  "subject": "A Little Curious",
+  "question": "what is the name of the network that was founded in 1926 as the red network and has broadcasted the first television broadcast in the united states?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 26,
+  "case_id": "342",
+  "subject": "Lunice",
+  "question": "What city, situated on the southern tip of the British Isles, has produced notable figures like Geoffrey Chaucer and is known for its rich history of tin and copper mining?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 27,
+  "case_id": "1663",
+  "subject": "Andreas Karkavitsas",
+  "question": "Why did Andreas Karkavitsas use a language that was widely used in medieval Europe as a language of administration and culture?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 28,
+  "case_id": "1760",
+  "subject": "Kevin Siegrist",
+  "question": "What regions with significant textile industries did Kevin Siegrist's career intersect with through his association with teams that utilized the machinery known for its intricate weaving patterns and high precision in fabric production?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 29,
+  "case_id": "683",
+  "subject": "The Red Sea Sharks",
+  "question": "Why did the standardization of the language used in The Red Sea Sharks during the Renaissance contribute to its global influence?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 0,
+  "position": 30,
+  "case_id": "215",
+  "subject": "Haseeb Ahsan",
+  "question": "What is the capital city of the country where Haseeb Ahsan is a citizen?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 1,
+  "case_id": "1324",
+  "subject": "Everett Range",
+  "question": "What is a region known for its diverse range of languages and cultures that lies within the eastern Himalayas?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 2,
+  "case_id": "397",
+  "subject": "Romulus Glacier",
+  "question": "What's a key feature of the continent that Romulus Glacier is part of that shows its cultural diversity?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 3,
+  "case_id": "384",
+  "subject": "Luigi Boccherini",
+  "question": "Boccherini's music is deeply connected to a language celebrated for its rich literary tradition, including works by a famous author, so which language is this?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 4,
+  "case_id": "1456",
+  "subject": "IndusInd Bank",
+  "question": "indusind bank was founded in a place that hosted the 2012 summer olympic games, what is that place known for?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 5,
+  "case_id": "1008",
+  "subject": "Greer Lankton",
+  "question": "Why did the capital of the Roman Empire become a significant location for Greer Lankton's work?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 6,
+  "case_id": "1821",
+  "subject": "The Celebrity Apprentice",
+  "question": "What is the major player in television news associated with the network that premiered The Celebrity Apprentice in 2004?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 7,
+  "case_id": "1770",
+  "subject": "Conrad von Soest",
+  "question": "What is the city known for its beautiful architecture, including the Hofburg Palace, and where did Conrad von Soest create many of his religious paintings and altarpieces?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 8,
+  "case_id": "1335",
+  "subject": "Aziz Nesin",
+  "question": "How did the popularization of a musical style by artists like Louis Armstrong and Duke Ellington influence Aziz Nesin's approach to his craft?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 9,
+  "case_id": "642",
+  "subject": "Karl Polanyi",
+  "question": "Where are the major centers of the field that studies human cultures through systematic comparison located?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 10,
+  "case_id": "349",
+  "subject": "A Thousand Plateaus",
+  "question": "What was the key contributor to the development of the laws that explain how things move and interact?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 11,
+  "case_id": "1176",
+  "subject": "Ricardo Faty",
+  "question": "What is the origin year of the sport in which Ricardo Faty participates?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 12,
+  "case_id": "252",
+  "subject": "Victor Merzhanov",
+  "question": "How would you describe the method by which Victor Merzhanov produces sound using the instrument he is known for?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 13,
+  "case_id": "571",
+  "subject": "Morozumi Range",
+  "question": "What is the significance of the continent where the first modern Olympic Games were held in relation to the Morozumi Range?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 14,
+  "case_id": "1976",
+  "subject": "A Little Curious",
+  "question": "What network is known for broadcasting the first TV show in the US and has aired Olympics coverage since the 1930s?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 15,
+  "case_id": "558",
+  "subject": "Spur Point",
+  "question": "Which of Spur Point's characteristics is associated with having the largest population of any continent?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 16,
+  "case_id": "342",
+  "subject": "Lunice",
+  "question": "What notable figure from the south-west of England, known for its rich history of tin and copper mining, has been influenced by the region's cultural heritage in their musical style?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 17,
+  "case_id": "460",
+  "subject": "Ralph Lyford",
+  "question": "How is Ralph Lyford's musical style connected to the origins of his genre?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 18,
+  "case_id": "1473",
+  "subject": "Clifford Grey",
+  "question": "Clifford Grey's language, which has over 100 million native speakers, is known for its rich literary tradition. What is a notable feature of this language?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 19,
+  "case_id": "877",
+  "subject": "Christoph Willibald von Gluck",
+  "question": "What major center of trade and commerce did Christoph Willibald von Gluck's employment in contribute to his musical development and recognition?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 20,
+  "case_id": "734",
+  "subject": "Casey Matthews",
+  "question": "What is known about the fast-paced, strategic gameplay of the sport that Casey Matthews plays?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 21,
+  "case_id": "1772",
+  "subject": "Vienna",
+  "question": "What is the historical role of the city twin to Vienna, which was once a major trading and cultural hub along a significant river?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 22,
+  "case_id": "649",
+  "subject": "Heyday Films",
+  "question": "Why is the Space Needle, an iconic landmark in the city where Heyday Films was founded, significant to the city's cultural identity?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 23,
+  "case_id": "688",
+  "subject": "Oulu",
+  "question": "What is a major reason for the widespread use of Oulu's In , an as a global communication tool?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 24,
+  "case_id": "1299",
+  "subject": "Clio Goldsmith",
+  "question": "What language has roots in the Slavic languages and has been shaped by other languages over time, and how does that relate to Clio Goldsmith's work?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 25,
+  "case_id": "897",
+  "subject": "Herman Boerhaave",
+  "question": "What is the scientific discipline that was significantly advanced by Albert Einstein's theory of relativity and is rooted in mathematical principles and empirical evidence, and which Herman Boerhaave made notable contributions to through his work in optics, mechanics, and electricity?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 26,
+  "case_id": "823",
+  "subject": "Teddy Bridgewater",
+  "question": "What position in soccer is known for its ability to pass, dribble, and link play between defenders and forwards, and is played by Teddy Bridgewater?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 27,
+  "case_id": "718",
+  "subject": "Bill Moyers Journal",
+  "question": "What is the platform that allows users to upload, share, and watch videos online where Bill Moyers Journal was first broadcasted?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 28,
+  "case_id": "1984",
+  "subject": "Nageswari",
+  "question": "What is it about Nageswari that reflects the influence of a language rooted in the Roman Empire?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 29,
+  "case_id": "171",
+  "subject": "Irakli Alasania",
+  "question": "Why does Irakli Alasania's dual citizenship allow him to have a unique perspective on the historical heritage and medieval architecture of the country he is connected to through his heritage?",
+  "label": "none"
+ },
+ {
+  "dataset": "DCT",
+  "sample_seed": 1,
+  "position": 30,
+  "case_id": "1035",
+  "subject": "Jean-Louis Murat",
+  "question": "What's a language that's the official language of Spain and many other countries, and why does it show up in Jean-Louis Murat's music?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 1,
+  "case_id": "754",
+  "subject": "Munzir ibn Sawa Al Tamimi",
+  "question": "What is a well-known principle associated with the religion Munzir ibn Sawa Al Tamimi was strongly affiliated with that he promoted throughout the Arabian Peninsula?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 2,
+  "case_id": "496",
+  "subject": "Legg Mason",
+  "question": "What is a well-known fact about Legg Mason's origins that relates to its current international operations?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 3,
+  "case_id": "736",
+  "subject": "Roy Paci",
+  "question": "What's something cool that happens when Roy Paci plays his instrument?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 4,
+  "case_id": "792",
+  "subject": "Lynda Clark, Baroness Clark of Calton",
+  "question": "What was the legal system in the place Lynda Clark, Baroness Clark of Calton was employed in known for?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 5,
+  "case_id": "515",
+  "subject": "Bezimienni bohaterowie",
+  "question": "What is a well-known fact about the historical events depicted in Bezimienni bohaterowie that highlights the show's accuracy and impact?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 6,
+  "case_id": "376",
+  "subject": "Kalyan Kumar",
+  "question": "What is a well-known fact about the city where Kalyan Kumar was born that relates to its historical significance?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 7,
+  "case_id": "631",
+  "subject": "Alexander Ralston",
+  "question": "What is the notable figure connected to the event where Alexander Ralston lost their life?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 8,
+  "case_id": "172",
+  "subject": "John Queen",
+  "question": "What's a big thing people know about the country John Queen is from that he's proud to represent?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 9,
+  "case_id": "1138",
+  "subject": "Ilia Chavchavadze",
+  "question": "Who is a famous person associated with the field that Ilia Chavchavadze was known for?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 10,
+  "case_id": "1852",
+  "subject": "Padda Island",
+  "question": "What is Padda Island known for besides its picturesque landscapes and rich biodiversity?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 11,
+  "case_id": "363",
+  "subject": "Sa\u00fal Levi Morteira",
+  "question": "What is the name of the place where Sa\u00fal Levi Morteira's death is associated with a significant Jewish community center?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 12,
+  "case_id": "1443",
+  "subject": "Jayakanthan",
+  "question": "What is a well-known fact about the language Jayakanthan is proficient in that explains how his ability in that language contributes to his connection with a wider audience?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 13,
+  "case_id": "1451",
+  "subject": "George Huntington",
+  "question": "What are the significant contributions George Huntington made to the field of human body studies through his research and teachings?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 14,
+  "case_id": "1236",
+  "subject": "Squad 51",
+  "question": "Why was the Squad 51 designed for both on and off-road use?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 15,
+  "case_id": "297",
+  "subject": "Antonio Franco",
+  "question": "What is a notable responsibility of the position that Antonio Franco holds within the Catholic Church?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 16,
+  "case_id": "1206",
+  "subject": "H. P. Lovecraft",
+  "question": "How did H. P. Lovecraft's musical involvement influence the thematic elements in his literary works?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 17,
+  "case_id": "246",
+  "subject": "Jonathan Osorio",
+  "question": "What is a common achievement that goalkeepers in professional soccer are known for accomplishing during a single game?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 18,
+  "case_id": "851",
+  "subject": "Stacked",
+  "question": "What is the original language of Stacked, and what region is it primarily spoken in?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 19,
+  "case_id": "957",
+  "subject": "Cheers",
+  "question": "When was Cheers first broadcast and what is the name of the network it initially aired on?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 20,
+  "case_id": "402",
+  "subject": "Fabio Grobart",
+  "question": "What is a significant contribution Fabio Grobart has made to the field of journalism beyond his authorship of books?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 21,
+  "case_id": "1566",
+  "subject": "McFadden & Whitehead",
+  "question": "What's a well-known fact about the city where McFadden & Whitehead started their music career?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 22,
+  "case_id": "827",
+  "subject": "Willy Brandt",
+  "question": "What cool thing did Willy Brandt's time in a big city help him become famous for?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 23,
+  "case_id": "1427",
+  "subject": "Rhayader",
+  "question": "Where in the US is Rhayader known for its mountainous surroundings and outdoor activities?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 24,
+  "case_id": "495",
+  "subject": "Bernhard Knipperdolling",
+  "question": "What is a well-known role or responsibility that Bernhard Knipperdolling, as a high-ranking official in the Catholic Church, is commonly associated with?",
+  "label": "indirect"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 25,
+  "case_id": "664",
+  "subject": "Valemont",
+  "question": "What is a characteristic of the television series Valemont that is directly related to its debut on a specific American broadcast network?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 26,
+  "case_id": "1224",
+  "subject": "Lars Paaske",
+  "question": "What is a notable achievement of Lars Paaske's career in badminton?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 27,
+  "case_id": "884",
+  "subject": "Le Bureau",
+  "question": "What is a well-known fact about Le Bureau's focus on natural and organic ingredients that contributes to its global success?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 28,
+  "case_id": "1190",
+  "subject": "Glamourina",
+  "question": "What era is Glamourina famous for reaching a wide audience?",
+  "label": "none"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 29,
+  "case_id": "569",
+  "subject": "Chase Clement",
+  "question": "Why is Chase Clement's role in soccer important for creating scoring opportunities?",
+  "label": "ambiguous"
+ },
+ {
+  "dataset": "enriched",
+  "sample_seed": 0,
+  "position": 30,
+  "case_id": "281",
+  "subject": "Matusevich Glacier",
+  "question": "Where exactly is Matusevich Glacier located, and what's a key feature of that area?",
+  "label": "none"
+ }
+]
