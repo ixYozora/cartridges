@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import requests
 
-EvalKind = Literal["cartridge", "lora"]
+EvalKind = Literal["cartridge", "lora", "base"]
 
 # Cartridges repository root: knowledge-editing/eval_common.py -> parents[1]
 def cartridges_repo_root() -> Path:
@@ -350,8 +350,11 @@ def judge_aggregates(results: List[Dict[str, Any]], use_judge: bool = True) -> D
     if not use_judge or not results:
         return {"judge_score": 0.0, "success_rate": 0.0, "judge_failure_rate": 0.0}
     valid = [r for r in results if not r.get("judge_failed")]
+    # judge v2 has no 0-5 score (its verdict is derived from booleans), so rows can carry
+    # an empty judge_score; average over the rows that do have one.
+    scores = [r["judge_score"] for r in valid if isinstance(r.get("judge_score"), (int, float))]
     return {
-        "judge_score": float(fmean(r["judge_score"] for r in valid)) if valid else 0.0,
+        "judge_score": float(fmean(scores)) if scores else 0.0,
         "success_rate": float(fmean(r["success"] for r in valid)) * 100 if valid else 0.0,
         "judge_failure_rate": (len(results) - len(valid)) / len(results) * 100,
     }

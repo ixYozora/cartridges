@@ -37,6 +37,7 @@ import csv
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
+import judge_v2
 from eval_common import (
     DEFAULT_JUDGE_MODEL,
     ask_judge_http,
@@ -82,12 +83,19 @@ def clean_response(text):
     """Remove thinking blocks and extra whitespace (delegates to eval_common)."""
     return strip_thinking_artifacts(text)
 
-def load_lora_model(lora_dir: str, base_model_name: str = "Qwen/Qwen3-4b"):
-    """Load base model with LoRA adapter."""
+def load_lora_model(lora_dir: Optional[str], base_model_name: str = "Qwen/Qwen3-4b"):
+    """Load the base model, with the LoRA adapter on top unless lora_dir is None.
+
+    lora_dir=None evaluates the base checkpoint as-is: the unedited floor, or a model
+    edited directly in its weights (a GROM-erased checkpoint) that has no adapter.
+    The tokenizer then comes from the base. Adapter dirs carry a copy of the same
+    tokenizer (vocab and rendered chat template identical for Qwen2.5-7B-Instruct,
+    its adapters, and the GROM-erased checkpoints), so the two paths are comparable.
+    """
     print(f"Loading base model: {base_model_name}")
     
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(lora_dir, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(lora_dir or base_model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
@@ -100,8 +108,12 @@ def load_lora_model(lora_dir: str, base_model_name: str = "Qwen/Qwen3-4b"):
     )
     
     # Load LoRA adapter
-    print(f"Loading LoRA adapter from: {lora_dir}")
-    model = PeftModel.from_pretrained(base_model, lora_dir)
+    if lora_dir is None:
+        print("No --lora-dir: evaluating the base model without an adapter")
+        model = base_model
+    else:
+        print(f"Loading LoRA adapter from: {lora_dir}")
+        model = PeftModel.from_pretrained(base_model, lora_dir)
     
     model.eval()
     print("Model loaded successfully!")
@@ -513,6 +525,10 @@ def generate_akew_test_cases(
             # Fallback: use old_target as locality subject
             locality_subject = old_target
         
+        # Which pool a prompt came from decides its correct answer: neighborhood prompts
+        # are other subjects that genuinely have the OLD target, attribute prompts other
+        # subjects that genuinely have the NEW one (judge v2 scores against it).
+        in_neighborhood = p in neighborhood_prompts
         test_cases.append({
             "q": p,
             "type": "Locality",
@@ -520,6 +536,8 @@ def generate_akew_test_cases(
             "is_original": None,  # Locality tests are neither original nor paraphrased
             "locality_subject": locality_subject,
             "edited_subject": subject,
+            "locality_pool": "neighborhood" if in_neighborhood else "attribute",
+            "locality_gold": old_target if in_neighborhood else new_target,
             "new_fact": f"{subject}'s {relation} is {new_target}",
             "old_fact": f"{subject}'s {relation} is {old_target}",
             "new_target": new_target,
@@ -570,6 +588,7 @@ def evaluate_single_test_case(
     judge_with_evaluated_model: bool = False,
     judge_base_url: str = "http://localhost:10210",
     judge_model: str = DEFAULT_JUDGE_MODEL,
+    judge_version: str = "v2",
 ) -> Dict[str, Any]:
     """Evaluate a single test case and return all metrics"""
     question = test_case['q']
@@ -604,7 +623,20 @@ def evaluate_single_test_case(
     judge_score = 0
     judge_reason = ""
     judge_failed = 0
-    if use_judge:
+    v2 = {}
+    if use_judge and judge_version == "v2":
+        # judge v2: the judge extracts what the answer says, then answers two yes/no
+        # checks; success is derived from those in code (see judge_v2.py). No 0-5 score.
+        res = judge_v2.judge_case(judge_base_url, judge_model, test_case, question, answer)
+        judge_score = ""
+        judge_reason = res["reason"]
+        judge_failed = 1 if res["judge_failed"] else 0
+        v2 = {"judge_new": res.get("judge_new"), "judge_old": res.get("judge_old"),
+              "judge_bleed": res.get("judge_bleed"), "judge_grounded": res.get("grounded"),
+              "judge_extracted": res.get("extracted"), "judge_version": "v2",
+              "locality_pool": test_case.get("locality_pool", ""),
+              "success_v2": res["success"]}
+    elif use_judge:
         if test_case['judge_type'] == 'efficacy':
             judge_prompt = EFFICACY_JUDGE_PROMPT.format(
                 question=question,
@@ -648,7 +680,11 @@ def evaluate_single_test_case(
         judge_reason = judge_res.get("reason", "")
         judge_failed = 1 if judge_res.get("judge_failed") else 0
 
-    success = 1 if judge_score >= 4 else 0
+    if v2:
+        success = "" if judge_failed else int(bool(v2.pop("success_v2")))
+    else:
+        v2.pop("success_v2", None)
+        success = 1 if judge_score >= 4 else 0
     
     result = {
         "question": question,
@@ -664,6 +700,7 @@ def evaluate_single_test_case(
         "judge_reason": judge_reason,
         "judge_failed": judge_failed,
         "success": success,
+        **{k: ("" if v is None else (int(v) if isinstance(v, bool) else v)) for k, v in v2.items()},
         "test_case": test_case,
         "is_original": test_case.get('is_original')  # Add for easy filtering
     }
@@ -689,6 +726,7 @@ def run_comprehensive_eval(
     judge_with_evaluated_model: bool = False,
     judge_base_url: str = "http://localhost:10210",
     judge_model: str = DEFAULT_JUDGE_MODEL,
+    judge_version: str = "v2",
 ) -> Dict[str, Any]:
     """Run comprehensive evaluation on AKEW data."""
     all_results = []
@@ -735,6 +773,7 @@ def run_comprehensive_eval(
                 entry_id=str(entry_id),
                 entry_subject=subject,
                 judge_with_evaluated_model=judge_with_evaluated_model,
+                judge_version=judge_version,
                 judge_base_url=judge_base_url,
                 judge_model=judge_model,
             )
@@ -955,7 +994,9 @@ def export_results(results: Dict[str, Any], output_path: str):
         if results['detailed_results']:
             fieldnames = ['entry_id', 'entry_subject', 'question', 'answer', 'type', 'rouge1', 'rouge2', 'rouge_l',
                          'bert', 'exact_match', 'old_target_mentioned', 'judge_score',
-                         'judge_reason', 'judge_failed', 'success']
+                         'judge_reason', 'judge_failed', 'success',
+                         'judge_new', 'judge_old', 'judge_bleed', 'locality_pool',
+                         'judge_grounded', 'judge_extracted', 'judge_version']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for result in results['detailed_results']:
@@ -965,8 +1006,10 @@ def export_results(results: Dict[str, Any], output_path: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Comprehensive LoRA Model Evaluation')
-    parser.add_argument('--lora-dir', type=str, required=True,
-                        help='Directory containing the LoRA adapter')
+    parser.add_argument('--lora-dir', type=str, default=None,
+                        help='Directory containing the LoRA adapter. Omit to evaluate '
+                             '--base-model itself with no adapter (unedited floor, or a '
+                             'GROM-erased checkpoint on its own)')
     parser.add_argument('--base-model', type=str, default="Qwen/Qwen3-4b",
                         help='Base model name (default: Qwen/Qwen3-4b)')
     parser.add_argument('--data-file', type=str,
@@ -974,6 +1017,12 @@ if __name__ == "__main__":
                         help='Path to AKEW JSON data file')
     parser.add_argument('--no-judge', action='store_true',
                         help='Skip LLM judge evaluation (faster)')
+    parser.add_argument('--judge-version', choices=['v1', 'v2'], default='v2',
+                        help="v2 (default): the judge extracts what the answer says and "
+                             "answers two yes/no checks; success is derived from those "
+                             "(judge_v2.py). v1: the old 0-5 score with success = score >= 4, "
+                             "which passed wrong answers (the unedited model scored 51%%) -- "
+                             "only for reproducing runs from before 2026-09-13.")
     parser.add_argument(
         '--judge-with-evaluated-model',
         action='store_true',
@@ -985,7 +1034,7 @@ if __name__ == "__main__":
         type=str,
         default='http://localhost:10310',
         help='OpenAI-compatible base URL for LLM judge (/v1/chat/completions). '
-             'Default assumes the vLLM judge server (slurm/serve_judge_vllm.sbatch); '
+             'Default assumes the vLLM judge server (legacy/serve_judge_vllm.sbatch); '
              'a tokasaurus URL also works but without grammar-guaranteed JSON. '
              'Ignored if --judge-with-evaluated-model is set',
     )
@@ -997,7 +1046,8 @@ if __name__ == "__main__":
     )
     parser.add_argument('--output', type=str, default=None,
                         help='Output stem for results. Default: '
-                             '<repo>/results/lora-YYYYMMDD_HHMMSS/eval')
+                             '<repo>/results/lora-YYYYMMDD_HHMMSS/eval '
+                             '(base-YYYYMMDD_HHMMSS when --lora-dir is omitted)')
     parser.add_argument('--quiet', action='store_true',
                         help='Suppress verbose output')
     parser.add_argument('--max-tests-per-sample', type=int, default=10,
@@ -1053,14 +1103,22 @@ if __name__ == "__main__":
         num_locality=args.num_locality,
         num_portability=args.num_portability,
         judge_with_evaluated_model=args.judge_with_evaluated_model,
+        judge_version=args.judge_version,
         judge_base_url=args.judge_base_url,
         judge_model=args.judge_model,
     )
 
     run_dir, stem_path = resolve_eval_output_dir(
-        eval_kind="lora",
+        eval_kind="lora" if args.lora_dir else "base",
         explicit_output=args.output,
     )
     print(f"\nRun directory: {run_dir}")
     print(f"Export stem: {stem_path}")
+    # Record what was evaluated. Result dirs are only timestamped, and a no-adapter
+    # run on the stock base and one on an erased base are otherwise indistinguishable.
+    with open(run_dir / "run_config.json", "w") as f:
+        json.dump({"lora_dir": args.lora_dir, "base_model": args.base_model,
+                   "data_file": str(data_path), "seed": args.seed,
+                   "judge_model": None if args.no_judge else args.judge_model,
+                   "judge_version": None if args.no_judge else args.judge_version}, f, indent=2)
     export_results(results, str(stem_path))
