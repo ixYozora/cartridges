@@ -1,122 +1,130 @@
 # Knowledge Editing via Self-Study + LoRA
 
 Thesis pipeline: take CounterFact/AKEW fact edits, use the Cartridges **Self-Study**
-mechanism to synthesize an enriched dialogue dataset around each edit, LoRA-finetune
-**Qwen2.5-7B-Instruct** (the model AnyEdit edits, for direct comparison) on that
-dataset, and evaluate with AKEW-style metrics.
+mechanism to synthesize a dialogue dataset around each edit, LoRA-finetune
+**Qwen2.5-7B-Instruct** (the model AnyEdit edits, for direct comparison) on that dataset,
+and evaluate with AKEW-style metrics.
 
-Full reference: [`docs/knowledge-editing-self-study.md`](../docs/knowledge-editing-self-study.md).
+Reference: [`docs/knowledge-editing-self-study.md`](../docs/knowledge-editing-self-study.md).
+Current numbers: [`docs/temp_metric_compare.md`](../docs/temp_metric_compare.md).
+History: [`docs/CHANGELOG.md`](../docs/CHANGELOG.md).
 
 ## Pipeline
 
 ```
-samples/CounterFact.json                (975 AKEW edits)
-        │  synthesize.py                (Self-Study; teacher Qwen3-4b on tokasaurus)
-        ▼
-outputs/<run>/artifact/dataset.parquet          RAW - never train on this
-        │  filter_dataset.py            (regex/lexical: think-strip repair, meta,
-        ▼                                portability leak)
-outputs/<run>/artifact/dataset_filtered.parquet INTERMEDIATE - never train on this
-        │  fidelity_filter.py           (LLM judge; drops targets asserting the
-        ▼                                pre-edit fact)
-outputs/<run>/artifact/dataset_final.parquet    <<< THE TRAINING FILE
-        │  lora_finetune.py             (PEFT LoRA on Qwen2.5-7B-Instruct)
-        ▼
-checkpoints/<lora-dir>
-        │  lora_eval.py                 (local LoRA answers + vLLM judge over HTTP)
-        ▼
-results/<lora-timestamp>/eval.*         (JSON + CSVs incl. AnyEdit-comparable table)
+samples/CounterFact.json                    975 AKEW edits
+   │  synthesize.py + filter_dataset.py     slurm/synth_clean.sbatch (tokasaurus teacher)
+   │                                        slurm/synth_vllm.sbatch  (vLLM teacher)
+   ▼
+outputs/<run>/artifact/dataset.parquet           RAW - never train on this
+outputs/<run>/artifact/dataset_filtered.parquet  INTERMEDIATE - never train on this
+   │  fidelity_filter.py                    slurm/fidelity_filter.sbatch
+   ▼                                        (LLM judge; drops targets asserting the old fact)
+outputs/<run>/artifact/dataset_final.parquet     <<< THE TRAINING FILE
+   │
+   │  grom_erase.py (optional)              slurm/grom_erase.sbatch
+   │     erase the pre-edit facts from the student first ("MU then FT")
+   ▼
+   │  lora_finetune.py                      slurm/lora_train_clean.sbatch
+   ▼
+checkpoints/<adapter>                       NOTE: the saved adapter is the BEST-VALIDATION
+   │                                        checkpoint (~epoch 2.7), not the last one
+   │  lora_eval.py + judge_v2.py            slurm/eval.sbatch  (judge gate -> generate -> grade)
+   ▼
+results/<lora-timestamp>/eval_detailed.csv  judge v2 verdicts + string metrics
+   │  compare_evals.py <run A> <run B>      paired, edit-clustered bootstrap
+   ▼
+deltas with 95% CIs
 ```
 
 ## Files
 
+### Pipeline (run for every experiment)
+
 | File | Role |
 |------|------|
-| `synthesize.py` | Dataset generation config (SelfStudySynthesizer + KnowledgeEditingResource + tokasaurus client) |
-| `lora_finetune.py` | LoRA training on the synthesized parquet |
-| `lora_eval.py` | **The eval script**: AKEW splits (efficacy/generalization/locality/portability), multi-ref ROUGE, BERTScore, EM, old-target leakage, LLM judge |
-| `eval_common.py` | Shared helpers: thinking-strip, results layout, **LLM judge** (xgrammar-constrained JSON on vLLM, `judge_failed` semantics, `judge_aggregates`) |
-| `judge_smoke_test.py` | Judge validation (reliability + calibration) — must PASS before any full eval |
-| `filter_dataset.py` | Stage 1 data cleaning: think-strip repair, context-meta and portability-leak drops → `dataset_filtered.parquet` |
-| `fidelity_filter.py` | Stage 2 data cleaning: LLM judge drops targets that assert the pre-edit fact → `dataset_final.parquet` (**the training file**) |
-| `analyze_portability_hops.py` | Portability hop-diversity gate: hop buckets, background-fact coverage, target leaks, duplicates, fact-anchor spread |
-| `grom_erase.py` | GROM closed-form erase of the pre-edit facts, from **either** the Qwen3-4b teacher or the Qwen2.5-7B student. `--dry-run` audits data/alpha on CPU; `--attribution K` picks a layer band; `--dump-forget-subset` writes the matching edit subset |
-| `compare_fidelity.py` | A/B readout for two synthesis runs: per-seed `asserts_old` drop rates with an **edit-clustered** confidence interval |
-| `summarize_grom_sweep.py` | Collapses a `grom_erase.py` sweep into one promotion table (suppression / collateral / fluency) |
-| `GROM/` | Reference clone of the authors' GROM repo (gitignored, MIT). `git clone https://github.com/Batorskq/GROM.git knowledge-editing/GROM` |
-| `slurm/synth_clean.sbatch` | tokasaurus teacher + `synthesize.py` + `filter_dataset.py` in one job. Env: `SYNTH_ARGS`, `TEACHER_MODEL`, `KE_DATA_FILE`, `SYNTH_SEED` |
-| `slurm/fidelity_filter.sbatch` | vLLM judge + `fidelity_filter.py` → `dataset_final.parquet`. Env: `INPUT` |
-| `slurm/lora_train_clean.sbatch` | LoRA training. Env: `DATA_FILE` (**required**), `BASE_MODEL`, `OUTPUT_DIR` |
-| `slurm/eval.sbatch` | vLLM judge + `lora_eval.py` in one 2-GPU job. Env: `LORA_DIR`, `BASE_MODEL`, `DATA_FILE` |
-| `slurm/grom_erase.sbatch` | One GROM erase. Env: `NUM_FORGET`, `SEED`, `OUT`, `EXTRA_ARGS` |
-| `slurm/grom_sweep.sbatch` / `grom_sweep_student.sbatch` | Hyperparameter sweeps over erase strength (teacher / student) |
-| `slurm/serve_judge_vllm.sbatch` | Standalone vLLM judge server (port 10310); logs land in `slurm/logs/` |
-| `samples/CounterFact.json` | Full 975-entry AKEW/CounterFact set |
-| `samples/dev_small.json` | 4-fact dev set for quick pipeline runs |
-| `samples/CounterFact-forget50-s1.json` | The 50-edit subset used by the GROM A/B, generated by `grom_erase.py --dump-forget-subset` so it cannot drift from the erased facts |
-| `legacy/` | Deprioritized cartridge/KV path (`comprehensive_eval.py`, `train.py`, `toka-serving.py`, `contexts/`) and superseded scripts (`llm_judge_eval.py`, `lora_serving.py`) |
+| `synthesize.py` | Self-Study dataset generation config. `SYNTH_ENGINE=tokasaurus` (default) or `vllm` |
+| `filter_dataset.py` | Cleaning stage 1: think-strip repair, context-meta and portability-leak drops |
+| `fidelity_filter.py` | Cleaning stage 2: LLM judge drops targets that assert the pre-edit fact -> `dataset_final.parquet` |
+| `grom_erase.py` | GROM closed-form erase of the pre-edit facts, from the teacher or the student. `--dry-run` audits on CPU; `--attribution K` picks a layer band |
+| `lora_finetune.py` | LoRA training. `--seed` makes init and data order reproducible (unset = historical behaviour) |
+| `lora_eval.py` | **The eval script**: AKEW splits (efficacy / generalization / locality / portability), ROUGE, BERTScore, EM, old-target leak, LLM judge (v2 by default) |
+| `judge_v2.py` | The judge: extraction first, success derived from two yes/no checks, plus a 39-case calibration set. Replaces v1's 0-5 score, which passed wrong answers (an unedited model scored 51%) |
+| `eval_common.py` | Shared helpers: thinking-strip, results layout, HTTP judge with xgrammar-constrained JSON, aggregates |
+| `compare_evals.py` | Paired, edit-clustered bootstrap between two runs: success, string leak, `names_new`, locality (`loc_correct`, `loc_bleed`), judge flags |
+
+### Analysis tools (run on demand)
+
+| File | Answers |
+|------|---------|
+| `rejudge.py` | Re-grades a **stored** run with judge v2, no regeneration -> `<run>/rejudge-v2-<tag>/`. Used for runs evaluated before judge v2 existed. `--calibrate` gates the judge; `--only-types Locality` refreshes part of an existing output |
+| `probe_recall_lora.py` | Where the old and the new target rank for every edit, per base(+adapter): did the erase survive finetuning? |
+| `audit_question_leakage.py` | Do portability training questions give the new target away? Gated on agreement with `samples/question_leak_handlabels.json` (**the current rubric fails that gate — see CHANGELOG**) |
+| `judge_smoke_test.py` | Gate for the **old** judge (v1); only used with `JUDGE_VERSION=v1` |
+
+### Slurm jobs
+
+| Job | Env |
+|-----|-----|
+| `slurm/synth_clean.sbatch` | `SYNTH_ARGS`, `TEACHER_MODEL`, `KE_DATA_FILE`, `SYNTH_SEED` |
+| `slurm/synth_vllm.sbatch` | same, plus `SYNTH_PORT` (vLLM; needed for teachers tokasaurus cannot serve) |
+| `slurm/fidelity_filter.sbatch` | `INPUT` |
+| `slurm/grom_erase.sbatch` | `NUM_FORGET`, `SEED`, `OUT`, `EXTRA_ARGS` |
+| `slurm/lora_train_clean.sbatch` | `DATA_FILE` (**required**), `BASE_MODEL`, `OUTPUT_DIR`, `TRAIN_SEED` |
+| `slurm/eval.sbatch` | `LORA_DIR` (`none` = no adapter), `BASE_MODEL`, `DATA_FILE`, `JUDGE_PORT`, `JUDGE_MODEL`, `JUDGE_VERSION` |
+| `slurm/rejudge.sbatch` | `RUNS`, `TAG`, `JUDGE_MODEL`, `JUDGE_PORT`, `ONLY_TYPES`, `CALIBRATION_STRICT` |
+| `slurm/probe_recall.sbatch` | (paths are in the script) |
+| `slurm/audit_question_leakage.sbatch` | `JUDGE_MODEL`, `JUDGE_PORT` |
+
+### Data and archives
+
+| Path | Contents |
+|------|----------|
+| `samples/CounterFact.json` | The full 975-edit AKEW/CounterFact set |
+| `samples/dev_small.json` | 4 edits, for pipeline smoke tests |
+| `samples/CounterFact-forget50-s1.json` | The 50-edit subset of the GROM A/B (`grom_erase.py --dump-forget-subset`) |
+| `samples/question_leak_handlabels.json` | 90 hand-labelled portability questions, the audit's reference |
+| `GROM/` | Reference clone of the authors' GROM repo (gitignored, MIT): `git clone https://github.com/Batorskq/GROM.git knowledge-editing/GROM` |
+| `experiments/` | Tools of finished experiments, kept to reproduce them: `analyze_portability_hops.py` (DCT 2-hop seed gate), `compare_fidelity.py` (teacher-erase A/B), `summarize_grom_sweep.py` + `grom_sweep*.sbatch` (erase-strength sweeps) |
+| `legacy/` | The earlier cartridge/KV route and superseded scripts (`comprehensive_eval.py`, `train.py`, `toka-serving.py`, `serve_judge_vllm.sbatch`, `contexts/`) |
 
 ## Usage
 
-Everything real runs through Slurm (no GPU on the login node). Never pass `--mem` —
-these nodes report `RealMemory=1` and any memory request fails. Every flashinfer/vLLM/
-tksrs job must pin `--gres=gpu:rtx5090:N`; the venv's flashinfer is built for sm120 and
-crashes on the rtx4090 node.
+Everything real runs through Slurm (no GPU on the login node). Never pass `--mem` — these
+nodes report `RealMemory=1` and any memory request fails. Every flashinfer / vLLM /
+tokasaurus job must pin `--gres=gpu:rtx5090:N`; the venv's flashinfer is built for sm120
+and crashes on the rtx4090 node.
 
 ```bash
-# 1) Synthesize + regex-filter in one job (tokasaurus teacher included)
+# 1) synthesize + regex-filter (teacher included in the job)
 sbatch --export=ALL,SYNTH_ARGS="num_samples=36864 name=MyRun" slurm/synth_clean.sbatch
 
-# 2) Edit-fidelity judge -> dataset_final.parquet (THE training file)
-sbatch --export=ALL,INPUT=<outputs/...>/artifact/dataset_filtered.parquet \
-    slurm/fidelity_filter.sbatch
+# 2) edit-fidelity judge -> dataset_final.parquet (THE training file)
+sbatch --export=ALL,INPUT=<outputs/...>/artifact/dataset_filtered.parquet slurm/fidelity_filter.sbatch
 
-# 3) LoRA finetune (DATA_FILE is required; BASE_MODEL only for a non-stock base)
-sbatch --export=ALL,DATA_FILE=<outputs/...>/artifact/dataset_final.parquet \
-    slurm/lora_train_clean.sbatch
+# 3) train
+sbatch --export=ALL,DATA_FILE=<...>/dataset_final.parquet slurm/lora_train_clean.sbatch
 
-# 4) Full eval. --time=12:00:00 because the 4h default is tight against the ~2.5h a
-#    full CounterFact run takes. BASE_MODEL MUST match the base the adapter was
-#    trained on, or the adapter silently loads on the wrong weights.
-sbatch --time=12:00:00 \
-    --export=ALL,LORA_DIR=<checkpoint>,DATA_FILE=samples/CounterFact.json \
+# 4) evaluate (judge gate + generation + judge v2 grading in one job)
+sbatch --time=12:00:00 --export=ALL,LORA_DIR=<checkpoints/...>,DATA_FILE=samples/CounterFact.json \
     slurm/eval.sbatch
+
+# 5) compare two runs
+python compare_evals.py results/<baseline> results/<treatment>
+
+# re-grade an OLD run (evaluated before judge v2) and compare those
+RUNS="results/<old-run>" TAG=qwen35-9b sbatch --export=ALL slurm/rejudge.sbatch
+python compare_evals.py results/<a>/rejudge-v2-qwen35-9b results/<b>/rejudge-v2-qwen35-9b
 ```
 
-Login-node work needs no job (CPU only):
+## Things that have bitten us
 
-```bash
-python judge_smoke_test.py --url http://<node>:10310   # MUST pass before a full eval
-python filter_dataset.py --input <dataset.parquet> --dry-run --show-examples 3
-python analyze_portability_hops.py <new>/dataset_filtered.parquet <baseline>/dataset_final.parquet
-python grom_erase.py --dry-run --num-forget 50         # data/alpha audit, no model load
-python compare_fidelity.py --base <a>/dataset_final.report.json \
-                           --erased <b>/dataset_final.report.json
-```
-
-Direct invocation (inside a job or an salloc) if you need to bypass the sbatch wrappers:
-
-```bash
-python lora_finetune.py \
-    --parquet-path <outputs/...>/artifact/dataset_final.parquet \
-    --model-name Qwen/Qwen2.5-7B-Instruct \
-    --output-dir ../checkpoints/<new-run-name>
-
-python lora_eval.py \
-    --lora-dir ../checkpoints/<adapter> \
-    --base-model Qwen/Qwen2.5-7B-Instruct \
-    --data-file samples/CounterFact.json \
-    --judge-base-url http://<node>:10310
-```
-
-## Judge notes
-
-- The judge runs on **vLLM** so JSON output is grammar-enforced (xgrammar): the
-  schema forces `response_claim` → `reason` → flags → `score`, which grounds the
-  judge and fixed severe miscalibration of the non-thinking Qwen3-4b judge.
-- Judge failures never contaminate scores: they are excluded from `judge_score` /
-  `success_rate` and reported as **`Judge Fail %`** — if that column is nonzero,
-  investigate before trusting judge numbers.
-- Re-run `judge_smoke_test.py` after ANY change to judge prompts, schema, or model.
-- `--base-model` in `lora_eval.py` defaults to `Qwen/Qwen3-4b`; always set it to
-  the actual base of your LoRA (e.g. `Qwen/Qwen2.5-7B-Instruct`).
+- **The saved adapter is the best-validation checkpoint** (`load_best_model_at_end`), in
+  practice `checkpoint-2500` (~epoch 2.7–2.9). `checkpoint-4575` is the end of epoch 5.
+- **Judge v1 passed wrong answers.** Success numbers from before 2026-09-13 are inflated by
+  ~10 points; re-grade old runs with `rejudge.py` before comparing them to new ones.
+- **Locality** is scored against the correct answer of the *other* subject, so its absolute
+  rate is bounded by what the unedited model knows (~40%), not ~95% as under v1.
+- **Concurrent eval jobs need distinct `JUDGE_PORT`s**, or they talk to each other's judge.
+- Every eval run writes `run_config.json` (adapter, base, data file, seed, judge) — check it
+  before trusting a results directory.

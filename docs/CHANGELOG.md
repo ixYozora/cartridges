@@ -11,6 +11,416 @@ estimate.
 
 ---
 
+## 2026-09-17 — Locality measured properly; judge v2 runs inside the eval job; scripts archived
+
+**Locality was the last lenient metric.** v1 only asked whether the edited subject was
+mentioned, so it passed "Alexander Island belongs to the continent of Europe" right after
+the Alpha Island -> Europe edit and scored every run ~95%. CounterFact's locality pool is
+two kinds of prompt, recovered by looking the question up in its entry: 1,005 neighbourhood
+prompts (correct answer = OLD target) and 945 attribute prompts (correct answer = NEW
+target). Judge v2 now scores a locality row as success when the answer gives that correct
+answer and does not carry the edit over; `compare_evals.py` also reports judge-free
+`loc_correct` and `loc_bleed`. On attribute prompts the correct answer *is* the edited
+value, which the judge kept flagging as carry-over (3.4% of rows), so only correctness is
+scored there — with that rule the calibration set passes 39/39, 16/16 critical (job 11994,
+2 judge failures in 21,450 calls).
+
+| Run | locality success | neighbourhood | attribute | edit carried over |
+|---|---|---|---|---|
+| unedited | 40.6 | 42.4 | 38.6 | 0.6 |
+| erased, no adapter | 38.6 | 39.1 | 38.1 | 0.6 |
+| DCT | 30.8 | 26.7 | 35.2 | 4.9 |
+| DCT seed 2 | 30.7 | 28.3 | 33.3 | 4.7 |
+| head160 | 33.2 | 30.4 | 36.1 | 4.5 |
+| head320 | 32.0 | 27.9 | 36.4 | 4.6 |
+| Qwen3.5 teacher | 29.9 | 25.7 | 34.5 | 5.1 |
+
+**Read: LoRA editing costs ~10 points on other subjects' facts** (stock -> DCT −9.74 \*,
+carry-over +4.31 \*), and the damage sits on the neighbours whose answer is the old target
+(42.4 -> 26.7). **The erase itself costs almost nothing** (−1.95 \*) and **recovers ~2.4
+points** of the training damage: head160 − DCT +2.36 \*, head160 − seed 2 +2.46 \*, while
+the two DCT seeds differ by −0.10. head320 vs head160 is no longer significant (−1.18),
+unlike under v1.
+
+**Question-side leakage still unmeasured.** Two rubrics were tried (11985, 11995); both
+disagree with the 90 hand labels (kappa 0.14 at best), and the `--min-kappa 0.6` gate in
+`audit_question_leakage.py` stopped the dataset-wide run rather than publish numbers we do
+not trust. The hand-labelled estimate (~40% of 60 sampled DCT questions give the new target
+away indirectly) stands as the only evidence. Next idea: drop the meta-judgement and simply
+have a model ANSWER each question from world knowledge with no edit shown — if the answer
+contains the new target, the question gave it away.
+
+**Judge v2 moved into the eval itself.** `lora_eval.py --judge-version v2` (now the default)
+grades each answer as it is generated, so `slurm/eval.sbatch` serves one judge
+(Qwen3.5-9B), gates it on the calibration set, and writes final numbers straight to
+`results/<run>/eval_detailed.csv`; no second judge and no re-judge pass. `JUDGE_VERSION=v1`
+reproduces the old grading. `rejudge.py` stays for runs evaluated before v2 existed.
+Verified end to end on the 4-edit dev set (jobs 11986, 12075).
+
+**Scripts archived** so the directory reflects what is live: `experiments/` now holds the
+tools of finished experiments (`analyze_portability_hops.py`, `compare_fidelity.py`,
+`summarize_grom_sweep.py`, `grom_sweep*.sbatch`) and `legacy/` gained the superseded
+standalone judge server. `knowledge-editing/README.md` was rewritten as a map of what runs,
+what is analysis-only, and the traps (best-validation checkpoints, v1 inflation, locality's
+~40% ceiling, per-job judge ports).
+
+---
+
+## 2026-09-14 — Seed control and true epoch 5: the erase effect exceeds run-to-run variance; training longer adds nothing
+
+Jobs 11937 (DCT retrain, `TRAIN_SEED=2` -> `checkpoints/lora-dct-seed2`, 1h56m, best =
+`checkpoint-2500` like every other run), 11938 (its eval, `results/lora-20260913_202911`),
+11940 (DCT `checkpoint-4575` = true epoch 5, `results/lora-20260913_202943`), 11953
+(Qwen3.5-9B re-judge of both; calibration 30/30; FAILED status = exit 2 on 1 judge failure,
+output complete), and 11954 (recall probe on the seed-2 adapter).
+Tables: [temp_metric_compare.md](temp_metric_compare.md) sections 5–6.
+
+**Training-seed variance is ~0.** DCT seed 2 − seed 1: judge v2 success −0.51 [−1.57,
++0.51], old-fact +0.08 [−0.80, +0.94], string leak +0.04 [−0.59, +0.63]. Recall-probe
+old-target rank ×1.01 [log10 −0.02, +0.03] (plain), ×0.99 (chat).
+
+**The student-erase effect holds against the independent seed.**
+- head160 − seed 2: success +1.13 \* (re-eval +1.04 \*), old-fact −1.09 \* (re-eval
+  −0.76 n.s.), generalization old-fact −2.05 \* / −1.49 \*, string leak −0.92 \*.
+- Old-target rank ×3.03 plain / ×1.90 chat, the same as against seed 1.
+- Across 2 seeds × 2 eval draws, generalization old-fact is significant in 4/4 and success in
+  3/4.
+
+**Train longer: no.** True epoch 5 − epoch 2.73: success −0.42 [−1.39, +0.50] (v2), −0.41
+(v1). Judge old-fact −0.76 [−1.50, −0.02] is borderline, from a single comparison (the
+same-weights repeat produced a chance star of similar size). The recall probe shows the old
+target ×1.3–1.5 further down for both seeds, but that does not become better answers.
+
+**Where the thesis stands.** On CounterFact (975 edits):
+- A GROM head erase of the pre-edit facts before LoRA finetuning makes the old fact 2–3×
+  less likely after training.
+- It does not affect learning the new fact.
+- It gives a small, replicated reduction in old-fact assertions (~1 point overall, ~2 on
+  generalization) and a ~1-point success gain.
+- This is well outside run-to-run variance, which is near zero on every metric.
+
+---
+
+## 2026-09-13 (night) — Judge v2 adopted (Qwen3.5-9B); the erase partially survives finetuning
+
+Jobs 11934 (re-judge, Qwen3-4b) and 11935 (re-judge, Qwen3.5-9B) over 9 runs; 11939
+(recall probe). Both re-judge jobs report FAILED only because `rejudge.py` exits 2 on any
+judge failure (11 and 2 failures of ~44k calls); outputs are complete. Tables:
+[temp_metric_compare.md](temp_metric_compare.md).
+
+**Grounding check added to judge v2.** The extracted value must occur in the answer.
+Qwen3-4b copied NEW TARGET into `answer_value` for ~150 generalization rows per run: of
+the rows the check flipped, none had the new target in the answer, and 156/157 were the
+new target verbatim. `rejudge.py --regrade` applied it to the Qwen3-4b output after the
+fact; Qwen3.5-9B ran with it and needed it on only 1–9 rows per run.
+
+**Judge choice: Qwen3.5-9B.**
+- Calibration 30/30 with all 12 critical cases correct (Qwen3-4b: 29/30, 30/30 only with
+  grounding).
+- Unedited-model floor 1.0% non-locality success (Qwen3-4b v2 2.7%, v1 31.3%).
+- Not the teacher's model.
+- Agreement with Qwen3-4b v2 on adapter runs: efficacy/generalization κ 0.95–0.98,
+  portability κ 0.82; the disagreements are mostly Qwen3-4b passing generic or old-fact
+  portability answers.
+
+**Results under v2 (Qwen3.5-9B).**
+- Absolute non-locality success: DCT 62.6% (v1 73.3%); generalization 76.9% -> 58.1%.
+- **head160 − DCT: the replicated effect is less old-fact assertion.** Judge old-fact −1.01
+  [−1.74, −0.27] and −0.90 [−1.62, −0.16] in the two eval draws; generalization −2.26 /
+  −2.05, all significant.
+- The success gain is significant in one draw only (+0.62 n.s., +1.19 \*).
+- Erase-only: judge old-fact −3.59 \* with success ~1%.
+- Enriched vs DCT still null; the Qwen3.5 teacher still −8.10 \*; head320 vs head160 n.s.
+- The same-weights repeat again produced a by-chance per-type star (efficacy old-fact
+  +1.44 \*).
+
+**Recall probe** (paired per edit, geometric-mean rank ratio):
+- The erase alone moves the old target ×8.5 (plain) / ×9.9 (chat) down the ranking.
+- After LoRA, head160 vs DCT: **×3.05 [log10 +0.43, +0.54] plain, ×1.89 [+0.24, +0.32]
+  chat.** That is 52% / 28% of the log-suppression surviving finetuning.
+- New-target rank unchanged (×0.98 / ×1.04).
+- DCT true epoch 5 vs best-val: old target ×1.30 / ×1.26 lower.
+
+**Thesis reading:** a GROM erase before LoRA leaves the old fact 2–3× less likely after
+finetuning at no cost to learning the new one. Behaviourally, it gives a small but
+replicated drop in old-fact assertions (about 1 point, 2 on generalization) and at most a
+marginal success gain. Still open: training-seed variance (11937/11938) and true epoch 5
+(11940).
+
+---
+
+## 2026-09-13 (later) — Correction: every evaluated adapter is the best-validation checkpoint; judge v2, recall probe and seed control queued
+
+**Correction to the entry below.** `lora_finetune.py` trains with
+`load_best_model_at_end=True`, so the adapter saved at the run root is the
+lowest-eval-loss checkpoint, not the end of training. For the DCT and head160 runs that is
+`checkpoint-2500` (epoch 2.73), verified byte-identical by sha256. Jobs 11911/11912
+therefore re-evaluated the **same weights** as `results/lora-20260823_173846` and
+`-20260825_031558`, and the "train longer: no" conclusion is withdrawn: epoch-5 weights
+(`checkpoint-4575`) have never been evaluated. Queued: **11940**, DCT `checkpoint-4575`.
+
+Audit of every adapter dir (sha256 of the root vs each checkpoint): **all evaluated LoRA
+adapters are `checkpoint-2500`** — enriched (epoch 2.84), clean/masked (2.92), DCT (2.73),
+head160 and head320 (2.73), Qwen3.5 teacher (2.82). Every thesis number so far is an
+~epoch-3 model. Cross-run comparisons stay fair (same step, similar epoch), but "5
+epochs" in earlier entries describes the training run, not the evaluated weights. (The
+dropped KE-loss run is the exception: best = `checkpoint-4500`.)
+
+What the repeat does measure is **pure eval noise** (temperature-0.7 generation plus
+judge; same weights, same questions): DCT OVERALL success −0.67 [−1.51, +0.13], leak
+−0.06 [−0.57, +0.45], names-new −0.04 [−1.11, +1.03]. But head160 efficacy moved
+**+2.26 [+0.62, +4.00], "significant" from noise alone**. With ~15 per-type tests per
+comparison, isolated per-type stars are expected by chance; claim only effects that
+repeat. The head160-vs-DCT result is therefore replicated on a second *eval draw* of the
+same adapters (generation noise ruled out), not across training runs.
+
+**Judge v2** (`judge_v2.py`, `rejudge.py`, `slurm/rejudge.sbatch`). Re-judges stored
+answers, with no regeneration. The judge fills fields in a fixed order (the value the
+response gives / its claim, a reason, then a NEW-target and an OLD-target boolean), and
+success is derived in code: efficacy/generalization `gives_new_target and not
+endorses_old_target`, portability `follows_new_fact and not follows_old_fact`. The old
+flag is also a judge-based leak that catches aliases and indirect portability leaks.
+Locality keeps its v1 verdict (the pool mixes gold-old and gold-new prompts). It is gated
+by a 30-case calibration set, 26 real rows from our evals including the v1 false
+positives, which requires 0 failures, >= 90% success agreement and all 12 "wrong or no
+value" cases failing. Tested against a mock string-matching judge: pipeline works, and
+string matching itself fails calibration (25/30), so the gate is not trivially passable.
+Output `<run>/rejudge-v2-<tag>/eval_detailed.csv`. Queued over all 9 runs with both
+**Qwen3-4b (11934)** and **Qwen3.5-9B (11935)**, calibration non-strict so both can be
+compared.
+
+**`compare_evals.py`** now also reports `names_new` (judge-free string match of the new
+target; locality excluded) and, on v2 output, `judge_old`. Reproduces the scratch numbers
+(DCT vs head160 names-new +0.84 [−0.41, +2.09]).
+
+**Post-LoRA recall probe** (`probe_recall_lora.py`, `slurm/probe_recall.sbatch`, job
+**11939**): first-token rank of the old and new target for all 975 edits, plain and
+eval-chat form, for stock / erased bases, the best-val adapters, and the true epoch-5
+checkpoints. CPU-smoke-tested on a tiny model. (A first submission, 11936, used the
+identical-weights configs and was cancelled.)
+
+**Training-seed control**: `lora_finetune.py --seed` (unset = unchanged behaviour: the
+Trainer default seeds the data order, LoRA init is unseeded; the train/val split is always
+42), `TRAIN_SEED` in `lora_train_clean.sbatch`. Queued: DCT data, stock base, seed 2 ->
+`checkpoints/lora-dct-seed2` (**11937**), then its eval (**11938**, afterok).
+
+---
+
+## 2026-09-13 — Epoch-2.7 and erase-only evals; the judge is too lenient
+
+Jobs 11911 (DCT `checkpoint-2500`, 2h29m), 11912 (head160 `checkpoint-2500`, 2h28m),
+11913 (stock Qwen2.5-7B, no adapter, 6h03m), 11914 (erased head160 base, no adapter,
+6h03m). Judge failures 0.00% (one locality row on 11914). `run_config.json` confirmed the
+intended adapter and base in all four. Full tables:
+[temp_metric_compare.md](temp_metric_compare.md).
+
+**Judge leniency (found via the no-adapter control).** The unedited model scores **50.9%
+overall success with no edit** (37.3% efficacy); 91.6% of those successes never name the
+new target. Qwen3-4b scores a different wrong value as "states the new fact" (*"Fabio
+Grobart holds Swiss citizenship"* for Cuba -> France: 5/5). On trained adapters 17–20% of
+successes don't name the new target, and 8 of 10 sampled were wrong answers scored 5.
+Success is `judge_score >= 4` (`lora_eval.py:662`), and the `mentions_new` flag the prompt
+asks for is not stored. Absolute success rates are inflated; judge-free metrics (names new
+target, leak) are now reported alongside.
+
+**Train longer: no.** DCT epoch 2.7 vs 5: OVERALL success −0.67 [−1.51, +0.13], leak −0.06
+[−0.57, +0.45], names-new −0.04 [−1.11, +1.03]. head160: only efficacy moves, and in
+favour of the *earlier* checkpoint (+2.26 [+0.62, +4.00]). The eval plateaus by ~3 epochs.
+
+**Student erase replicates at epoch 2.7**: head160 − DCT OVERALL success +2.07 [+1.13,
++3.05], generalization leak −1.74 [−3.08, −0.46], locality +0.15 (n.s.). But the
+judge-free new-target rate does not significantly rise at either checkpoint (+0.84, +1.17):
+**the robust claim is the leak reduction, not the success gain.** Both checkpoints are from
+the same two training runs, so training-seed variance is still unmeasured.
+
+**Erase-only control**: erased − stock, no adapter. Non-locality leak 27.84 -> 22.36 (−5.48
+[−6.63, −4.37]; efficacy −8.72), new-target naming unchanged (3.55 -> 3.14), locality
+unchanged (−0.10 [−0.36, +0.15]). The erase alone suppresses parametric recall in free
+generation (a −20% relative leak) and installs nothing; answers that stop leaking mostly
+drop the value. This is the same order as the reduction after LoRA (−17% at epoch 5),
+consistent with the suppression surviving finetuning. The post-LoRA recall probe is still
+owed.
+
+---
+
+## 2026-09-12 — No-adapter evaluation, per-job judge port, qualitative analysis; KE loss dropped
+
+Following the 2026-08-26 supervisor meeting. All numbers in the meeting notes were re-run
+(`compare_evals.py`, `compare_fidelity.py`, `analyze_portability_hops.py`) and reproduce.
+One correction: the 2-hop question leak (13.9% -> 3.5%) and duplicates (13.4% -> 1.3%)
+are regex / exact-string measurements, not LLM-judge ones.
+
+**KE loss dropped.** The 3-term objective (NLL + hinge forget + KL retain) was never
+committed; its code is reverted. Its one full run (job 11364) showed why it could not
+work on this data: the forget term fired on 0 tokens in 382 of 457 logged steps, because
+`fidelity_filter.py` already removes rows asserting the old fact and the denial-aware mask
+skipped the rest. Adapter `checkpoints/lora_qwen2.5-7B-Instruct-20260827_020218` left
+unevaluated.
+
+**`lora_eval.py --lora-dir` is now optional.** Without it the script evaluates
+`--base-model` as-is: the unedited floor, or a GROM-erased checkpoint on its own (the
+control still owed for the student-erase result, and the only way to score a closed-form
+edit). The tokenizer then loads from the base — checked identical (vocab 151,665, same
+rendered chat template) for `Qwen/Qwen2.5-7B-Instruct`, the DCT adapter dir and the
+head160 erased checkpoint. Such runs go to `results/base-<ts>/`, and every eval now writes
+`run_config.json` (adapter, base, data file, seed, judge) — until now the base model could
+only be recovered from Slurm logs. CPU smoke test on a tiny random Qwen2, with and without
+a LoRA adapter: both paths export all files.
+
+`eval.sbatch`: `LORA_DIR=none` evaluates without an adapter; new `JUDGE_PORT` override,
+because two evals on tujestpolin would otherwise both start their judge on 10310.
+
+**Queued**: 11911 (DCT adapter at epoch 2.73, `checkpoint-2500`) and 11912 (head160
+adapter at epoch 2.73, judge port 10311). DCT validation loss is lowest there (0.439,
+rising to 0.550 by epoch 4.92), so these answer "train longer?" without training.
+Also queued, the erase-only control: 11913 (stock `Qwen/Qwen2.5-7B-Instruct`, no adapter,
+port 10312) and 11914 (`qwen2.5-7b-erased-all975-head160`, no adapter, port 10313). Their
+difference is what the erase does on its own; head160-with-LoRA against both shows how
+much of the student-erase gain needs the finetune.
+
+**Qualitative analysis** -> [qualitative-analysis.md](qualitative-analysis.md). Headlines:
+the DCT seed removed direct question leakage but ~40% of sampled 2-hop questions still
+describe the new target uniquely (answerable without the edit); the portability score is
+~"does the answer name the new target" (97.8% vs 23.5% success), a rate the DCT seed did
+not move; the leak metric misses indirect old-fact leaks (~4-12% of portability tests);
+Qwen3.5's damage is invented reconciling back-stories (concessive phrasing 9.8% vs 2.6% of
+answers, leaking 37%); and wrong answers carry other edits' new targets 5x more often than
+their old targets (cross-edit interference).
+
+---
+
+## 2026-08-26 — Qwen3.5-9B teacher: full pipeline run, decisively rejected
+
+Jobs 11266 (synth, 1h12m) -> 11278 (fidelity) -> 11279 (train, 2h10m) -> 11280 (eval,
+2h50m). Run despite the smoke's negative read, on the correct grounds that Step 1 already
+proved data-level metrics do not predict eval metrics. Worth doing: it produced a much
+sharper finding than the smoke could.
+
+**Result: worse on everything that matters.** OVERALL success 79.52 -> 71.53 (-7.99),
+Generalization 76.92 -> 60.05 (-16.87), OVERALL leak 5.27 -> 10.43 (doubled). All
+significant. Locality *rose* (+1.44).
+
+**Cause identified, not assumed.** Data is not malformed (0% think tags, no markup). The
+teacher is more verbose: median target 169 chars vs 119, training loss 0.5027 vs 0.3404.
+Critically, **training targets mentioning the old answer rose 22.10% -> 28.24%**, and on
+`question` seeds — where the old answer is never supplied in the prompt — **6.0% ->
+15.5%**. The stronger model volunteers the old fact while correcting it ("Sheffield, not
+Sydney as commonly believed"). The fidelity judge correctly keeps those rows (they do not
+assert the old fact), but the student learns the habit and every mention scores as leak.
+
+Locality rising is the confirming tell: the student learned the edits less strongly, so it
+disturbed unrelated facts less — the signature of under-learning.
+
+**Conclusion for the thesis: a more capable teacher is not a better data generator for
+knowledge editing. Brevity beats capability.** Qwen3-4b stays. The vLLM backend remains
+valuable independently.
+
+---
+
+## 2026-08-25 — Student erase WORKS: significant leak reduction at head160, over-suppression at head320
+
+Jobs 11230 (`results/lora-20260825_031558`, head160) and 11231
+(`results/lora-20260825_053851`, head320) vs the unerased DCT adapter
+(`results/lora-20260823_173846`). Base models verified from the logs
+(`qwen2.5-7b-erased-all975-head160/-head320`); judge fail 0%; all three runs pair
+exactly, 6825/6825 on (entry_id, type, question).
+
+New tool: `compare_evals.py` — paired, **edit-clustered** bootstrap over eval CSVs
+(975 clusters, 10k iterations, one shared set of cluster draws reused across every
+metric so the intervals are mutually consistent).
+
+**head160 vs unerased — significant on the target metric and its knock-on:**
+
+| | base | head160 | delta | 95% CI |
+|---|---|---|---|---|
+| Generalization leak | 9.13 | 6.97 | **-2.15** | [-3.44, -0.87] * |
+| OVERALL leak | 5.27 | 4.40 | **-0.88** | [-1.41, -0.37] * |
+| Generalization success | 76.92 | 79.23 | **+2.31** | [+0.26, +4.36] * |
+| OVERALL success | 79.52 | 80.60 | **+1.08** | [+0.16, +2.02] * |
+| Locality success | 95.18 | 95.64 | +0.46 | [-0.46, +1.38] |
+
+**Locality was not damaged** — the pre-registered guardrail held, and in fact ticked up.
+
+**head320 keeps the leak reduction but loses the success gains** (Gen success +1.69
+[-0.36, +3.74], OVERALL +0.51 [-0.42, +1.47]) and **significantly damages locality
+relative to head160** (-1.18, [-2.05, -0.31] *). Leak stays significantly below baseline
+(OVERALL -0.79 *).
+
+**Read: an inverted-U, not the monotone curve that was pre-registered.** That is a real
+effect with an operating point (head160), not the flat signature that falsified the
+teacher arm. The strongest evidence it is not training noise: **two independently
+trained adapters both show significant generalization-leak reduction in the same
+direction** (-2.15 and -1.90).
+
+Still outstanding before this is a claim: (a) an unerased re-run to quantify pure
+training-seed variance, or an erase-only eval (no adapter) to separate "removed
+knowledge" from "made the LoRA's job easier" — `lora_eval.py:968` has `--lora-dir`
+`required=True`, so that needs ~10 lines; (b) the post-LoRA recall probe — whether the
+erase survived 5 epochs of finetuning at all.
+
+---
+
+## 2026-08-25 — Qwen3.5-9B teacher smoke: works end to end, does NOT justify a swap
+
+Job 11238, 10m07s, first run of the new vLLM backend. **The engine path is validated**:
+vLLM 0.25.1 served `Qwen/Qwen3.5-9B` (hybrid linear+full attention) on the 5090, the
+`enable_thinking=false` startup probe passed, 512 samples generated, filter kept 478
+(93.4%).
+
+Against the Qwen3-4b DCT run (`analyze_portability_hops.py`), n=134 portability rows so
+treat as directional:
+
+- **Better instruction-following**: fact-anchor compliance 80% vs 68%; duplicate
+  questions 0.0% vs 1.4%; question leaks 0% in both.
+- **Hop diversity NOT better** — country/location 53.0% vs 45.6%, i.e. *more* of the
+  monotony the DCT seed exists to fix; famous-for 3.7% vs 12.9%.
+- Keep rate slightly lower (93.4% vs 95.0%); `repaired_by_think_strip` 8/512 (1.6%) =
+  spontaneous `<think>` in content, not the 100% signature of the job-11150 bug.
+
+**Verdict: the primary motivation did not materialise, so a full regeneration is not
+justified on this evidence.** The vLLM backend stays useful regardless.
+
+---
+
+## 2026-08-25 — vLLM as a second synthesis backend (tokasaurus stays the default)
+
+Groundwork for the teacher upgrade: tokasaurus' fork implements dense llama/qwen2/qwen3
+only, so it cannot serve a MoE or hybrid-attention teacher (Qwen3.5, Qwen3.8-27B). vLLM
+0.25.1 is already installed in `.venv-vllm` for the judge and supports both.
+
+**This turned out to need almost no new code.** `cartridges/clients/openai.py` already
+implements every argument `SelfStudySynthesizer` passes — `temperature`, `stop`,
+`max_completion_tokens`, `top_logprobs`, `enable_thinking`, `modal_upstream_id` — and
+forwards `enable_thinking` as `chat_template_kwargs` whenever `base_url` is set. Checked
+against the installed server rather than assumed:
+
+- `chat_template_kwargs` is a first-class field on vLLM's `ChatCompletionRequest`
+  (`entrypoints/openai/chat_completion/protocol.py:329`).
+- `OpenAIBaseModel` sets `model_config = ConfigDict(extra="allow")`
+  (`entrypoints/openai/engine/protocol.py:30`), so the client's non-standard
+  `modal_upstream_id` in `extra_body` is accepted rather than rejected.
+- `max_logprobs` defaults to 20 (`config/model.py:222`) and `num_top_logprobs` is
+  exactly 20 — at the limit, so the sbatch passes `--max-logprobs 20` explicitly.
+
+**Changes.** `synthesize.py` gained a `SYNTH_ENGINE` switch (`tokasaurus` default =
+unchanged behaviour, `vllm` builds an `OpenAIClient`) plus a `SYNTH_PORT` override; the
+`SynthesizeConfig` body is shared by both engines on purpose, since duplicating the seed
+mix into a second entrypoint is how an A/B arm silently drifts. New
+`slurm/synth_vllm.sbatch` mirrors `synth_clean.sbatch` (same `synthesize.py`, same
+`filter_dataset.py` QC) with vLLM serving.
+
+**The vLLM path is structurally immune to the job-11150 bug.** `OpenAIClient` does no
+model-name lookup — it forwards `enable_thinking` unconditionally — so a local
+checkpoint path cannot silently fall back to Qwen3's thinking-mode default the way it
+did through `MODEL_TO_THINKING_OVERRIDES`. The sbatch still asserts it before spending a
+run: a probe completion with `chat_template_kwargs.enable_thinking=false` must come back
+without a `<think>` block, or the job fails at startup.
+
+Verified offline (config construction, client instantiation, `type == "hf"`, bad-engine
+guard); **not yet run against a live server** — an end-to-end smoke is the next step.
+
+---
+
 ## 2026-08-23 — Student erase ("MU first, then FT"): setup and dose-response run
 
 The prof's 2026-08-04 idea, recorded but never executed while we built the teacher arm.
