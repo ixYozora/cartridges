@@ -789,10 +789,15 @@ def run_comprehensive_eval(
                 if use_judge:
                     if result.get('judge_failed'):
                         print(f"Judge: \033[91mFAILED\033[0m - {result['judge_reason'][:150]}")
-                    else:
+                    elif isinstance(result['judge_score'], (int, float)):
                         score = result['judge_score']
                         color = "\033[92m" if score >= 4 else ("\033[93m" if score >= 3 else "\033[91m")
                         print(f"Judge: {color}{score}/5\033[0m - {result['judge_reason']}")
+                    else:
+                        # judge v2 has no 0-5 score; its verdict is the success flag
+                        ok = result['success'] == 1
+                        color = "\033[92m" if ok else "\033[91m"
+                        print(f"Judge: {color}{'pass' if ok else 'fail'}\033[0m - {result['judge_reason']}")
                 print("-" * 80)
         
         results_by_entry[str(entry_id)] = {
