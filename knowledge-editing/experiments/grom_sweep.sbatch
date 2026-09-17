@@ -66,4 +66,4 @@ run head160_mlp600 --beta-head 160 --beta-mlp 600 --layers $BAND --mlp-key-pos a
 
 echo ""
 echo "############ SUMMARY ############"
-$REPO/.venv/bin/python summarize_grom_sweep.py --sweep-dir $SWEEP
+$REPO/.venv/bin/python experiments/summarize_grom_sweep.py --sweep-dir $SWEEP

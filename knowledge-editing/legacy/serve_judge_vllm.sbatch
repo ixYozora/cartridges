@@ -15,7 +15,7 @@
 # --served-model-name keeps the model id identical to the tokasaurus setup so
 # DEFAULT_JUDGE_MODEL ("Qwen/Qwen3-4b") works unchanged.
 #
-# Submit:            sbatch slurm/serve_judge_vllm.sbatch
+# Submit:            sbatch legacy/serve_judge_vllm.sbatch
 # Find the node:     squeue -u $USER -n judge-vllm -o "%N"
 # Readiness check:   curl http://<node>:10310/v1/models
 # Then point evals:  --judge-base-url http://<node>:10310
