@@ -22,7 +22,12 @@ export WANDB_MODE=offline
 
 # BASE_MODEL lets the run start from a GROM-erased student ("MU first, then FT")
 # instead of the stock checkpoint. The eval must then be given the SAME base.
-echo "base model: ${BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+# TRAIN_SEED (optional) seeds the LoRA init and data order, for run-to-run variance
+# controls. Unset = historical behaviour.
+# KE_ARGS (optional) turns on the three-term objective, e.g.
+#   KE_ARGS="--ke-loss --lambda-forget 1.0 --lambda-retain 1.0"
+# Unset = plain CE, identical to every run before it existed.
+echo "base model: ${BASE_MODEL:-Qwen/Qwen2.5-7B-Instruct}  seed: ${TRAIN_SEED:-unset}"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
 # OUTPUT_DIR override so a follow-on eval job can be chained at submit time
@@ -44,4 +49,6 @@ exec $REPO/.venv/bin/python lora_finetune.py \
     --learning-rate 2e-5 \
     --warmup-steps 100 \
     --save-steps 500 \
-    --wandb-run-name lora-$STAMP
+    --wandb-run-name lora-$STAMP \
+    ${TRAIN_SEED:+--seed "$TRAIN_SEED"} \
+    ${KE_ARGS:-}

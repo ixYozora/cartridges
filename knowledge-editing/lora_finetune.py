@@ -24,7 +24,10 @@ Example:
 
 import os
 import json
+import math
+import random
 import torch
+import torch.nn.functional as F
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import (
@@ -128,6 +131,146 @@ def create_lora_model(model, lora_r: int = 16, lora_alpha: int = 32, lora_dropou
     return model
 
 
+class KESets:
+    """Forget and retain sequences for the 3-term objective, tokenized once.
+
+    forget  each edit's own question (and its paraphrases) completed with the OLD answer --
+            the statement the model must stop making. The 2026-08 attempt looked for the old
+            answer inside the Self-Study targets instead and found almost nothing (the
+            fidelity filter had already removed those rows), so its forget term never fired.
+    retain  CounterFact neighbourhood prompts completed with THEIR correct answer, which is
+            the same old value carried by a DIFFERENT subject. That is exactly the pair plain
+            finetuning confuses (locality drops ~10 points, 2026-09-17), so the KL term
+            anchors it against the un-finetuned model.
+
+    Sequences are padded to one fixed width so the extra forward passes do not make
+    torch.compile re-trace every step.
+    """
+
+    def __init__(self, path, tokenizer, max_edits=0, retain_per_edit=2, width=48):
+        entries = json.loads(Path(path).read_text())
+        if max_edits:
+            entries = entries[:max_edits]
+        self.width = width
+        self.pad = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+        self.forget, self.retain = [], []
+        for e in entries:
+            rw = e["requested_rewrite"]
+            subject = rw["subject"]
+            old = " " + rw["target_true"]["str"]
+            prompts = [rw["prompt"].format(subject)]
+            prompts += [p.replace("{}", subject) if "{}" in p else p
+                        for p in e.get("paraphrase_prompts", [])]
+            for p in prompts:
+                seq = self._tokenize(tokenizer, p, old)
+                if seq:
+                    self.forget.append(seq)
+            for p in e.get("neighborhood_prompts", [])[:retain_per_edit]:
+                seq = self._tokenize(tokenizer, p, old)
+                if seq:
+                    self.retain.append(seq)
+        print(f"KE sets: {len(self.forget)} forget sequences, {len(self.retain)} retain "
+              f"sequences from {len(entries)} edits")
+
+    def _tokenize(self, tokenizer, prompt, answer):
+        prompt_ids = tokenizer(prompt, add_special_tokens=True)["input_ids"]
+        ids = tokenizer(prompt + answer, add_special_tokens=True)["input_ids"]
+        if len(ids) <= len(prompt_ids) or len(ids) > self.width:
+            return None
+        return ids, len(prompt_ids)
+
+    def batch(self, which, size, rng, device):
+        """-> input_ids, attention_mask, target_mask (positions predicting the answer)."""
+        pool = self.forget if which == "forget" else self.retain
+        picks = [pool[rng.randrange(len(pool))] for _ in range(min(size, len(pool)))]
+        ids = torch.full((len(picks), self.width), self.pad, dtype=torch.long)
+        att = torch.zeros((len(picks), self.width), dtype=torch.long)
+        tgt = torch.zeros((len(picks), self.width - 1), dtype=torch.bool)
+        for i, (seq, prompt_len) in enumerate(picks):
+            ids[i, :len(seq)] = torch.tensor(seq)
+            att[i, :len(seq)] = 1
+            tgt[i, prompt_len - 1:len(seq) - 1] = True
+        return ids.to(device), att.to(device), tgt.to(device)
+
+
+class KELossTrainer(Trainer):
+    """Three-term knowledge-editing objective.
+
+        L = L_ce  +  lambda_forget * L_forget  +  lambda_retain * L_retain
+
+    L_ce      the usual next-token loss on the Self-Study answers (unchanged).
+    L_forget  a HINGE on the old answer's log-prob in the forget set: relu(logp - tau).
+              Bounded on purpose -- the usual "maximise NLL" unlearning term is unbounded
+              below and lets a few tokens dominate the gradient. The hinge stops pushing
+              once the old answer is already unlikely (below tau).
+    L_retain  KL to the UN-FINETUNED model on the retain set, so suppressing the old value
+              for the edited subject does not drag it down for its neighbours.
+
+    The reference model is these same weights with the LoRA adapter switched off
+    (`disable_adapter`), so no second model and no second GPU is needed.
+    """
+
+    def __init__(self, *args, ke_sets=None, lambda_forget=1.0, lambda_retain=1.0, tau=None,
+                 forget_batch=4, retain_batch=4, ke_seed=0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ke_sets = ke_sets
+        self.lambda_forget = lambda_forget
+        self.lambda_retain = lambda_retain
+        # default tau = log(0.05): only penalise while the old answer still has more than
+        # 5% probability at that position.
+        self.tau = math.log(0.05) if tau is None else tau
+        self.forget_batch = forget_batch
+        self.retain_batch = retain_batch
+        self.rng = random.Random(ke_seed)
+        self._ke_logs = {}
+        # The per-step term is one 4-sequence draw, so a single 0 says little; track how
+        # often the hinge is active at all (it goes quiet once the old answer is below tau).
+        self._forget_fired = 0
+        self._forget_steps = 0
+
+    def _answer_logprobs(self, model, ids, att, tgt):
+        logprobs = model(input_ids=ids, attention_mask=att).logits[:, :-1].log_softmax(-1)
+        gold = ids[:, 1:].unsqueeze(-1)
+        return logprobs, logprobs.gather(-1, gold).squeeze(-1)[tgt]
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        outputs = model(**inputs)
+        ce = outputs.loss
+        device = ce.device
+        forget = retain = ce.new_zeros(())
+
+        if self.lambda_forget > 0 and self.ke_sets.forget:
+            ids, att, tgt = self.ke_sets.batch("forget", self.forget_batch, self.rng, device)
+            _, gold_lp = self._answer_logprobs(model, ids, att, tgt)
+            forget = torch.relu(gold_lp - self.tau).mean()
+
+        if self.lambda_retain > 0 and self.ke_sets.retain:
+            ids, att, tgt = self.ke_sets.batch("retain", self.retain_batch, self.rng, device)
+            cur, _ = self._answer_logprobs(model, ids, att, tgt)
+            # `model` may be wrapped (torch.compile / accelerate) and disable_adapter lives
+            # on the PeftModel underneath; run the reference pass through the SAME object so
+            # the adapter-off state actually applies.
+            peft_model = self.accelerator.unwrap_model(model)
+            with torch.no_grad():
+                with peft_model.disable_adapter():
+                    ref = peft_model(input_ids=ids, attention_mask=att).logits[:, :-1].log_softmax(-1)
+            retain = F.kl_div(cur[tgt], ref[tgt], log_target=True, reduction="batchmean")
+
+        self._forget_steps += 1
+        self._forget_fired += int(forget.detach().item() > 0)
+        self._ke_logs = {"ce": ce.detach().item(), "forget": forget.detach().item(),
+                         "retain": retain.detach().item(),
+                         "forget_fired_pct": 100 * self._forget_fired / self._forget_steps}
+        loss = ce + self.lambda_forget * forget + self.lambda_retain * retain
+        return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs, *args, **kwargs):
+        # Surface the three terms separately: if a run degrades you need to see WHICH term.
+        if self._ke_logs:
+            logs = {**logs, **{f"ke/{k}": v for k, v in self._ke_logs.items()}}
+        return super().log(logs, *args, **kwargs)
+
+
 def compile_model_if_needed(model, use_compile: bool = True):
     """Compile model with torch.compile if requested and available.
     
@@ -170,6 +313,15 @@ def train(
     wandb_project: str = "cartridges-lora-finetune-anyedit-baseline",
     wandb_entity: str = None,
     wandb_run_name: str = None,
+    seed: int = None,
+    ke_loss: bool = False,
+    ke_data_file: str = None,
+    lambda_forget: float = 1.0,
+    lambda_retain: float = 1.0,
+    tau: float = None,
+    ke_forget_batch: int = 4,
+    ke_retain_batch: int = 4,
+    ke_max_edits: int = 0,
 ):
     """Main training function."""
     
@@ -196,12 +348,25 @@ def train(
             "use_compile": use_compile,
             "bf16": bf16,
             "gradient_checkpointing": gradient_checkpointing,
+            "seed": seed,
+            "ke_loss": ke_loss,
+            "lambda_forget": lambda_forget if ke_loss else None,
+            "lambda_retain": lambda_retain if ke_loss else None,
         }
     )
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    # --seed makes the LoRA init and the data order reproducible. Unset keeps the
+    # historical behaviour: data order from the Trainer default (42), LoRA init unseeded.
+    # The 90/10 train/val split stays at seed 42 either way, so a seed run trains on
+    # exactly the same rows.
+    if seed is not None:
+        from transformers import set_seed
+        set_seed(seed)
+        print(f"Seed: {seed}")
     
     # Clear CUDA cache before starting
     if torch.cuda.is_available():
@@ -283,16 +448,29 @@ def train(
         gradient_checkpointing=gradient_checkpointing,
         optim="adamw_torch_fused",  # Use fused optimizer for efficiency
         max_grad_norm=1.0,  # Gradient clipping
+        **({"seed": seed} if seed is not None else {}),
     )
     
-    # Create trainer
-    trainer = Trainer(
+    # Create trainer. Without --ke-loss this is the plain Trainer, identical to every run
+    # before the objective existed.
+    trainer_kwargs = dict(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
     )
+    if ke_loss:
+        ke_sets = KESets(ke_data_file, tokenizer, max_edits=ke_max_edits)
+        print(f"KE loss ON: lambda_forget={lambda_forget} lambda_retain={lambda_retain} "
+              f"tau={tau if tau is not None else 'log(0.05)'} "
+              f"forget_batch={ke_forget_batch} retain_batch={ke_retain_batch}")
+        trainer = KELossTrainer(**trainer_kwargs, ke_sets=ke_sets, lambda_forget=lambda_forget,
+                                lambda_retain=lambda_retain, tau=tau,
+                                forget_batch=ke_forget_batch, retain_batch=ke_retain_batch,
+                                ke_seed=seed or 0)
+    else:
+        trainer = Trainer(**trainer_kwargs)
     
     # Train (autocast is handled by TrainingArguments bf16/fp16 flags)
     print("Starting training...")
@@ -459,6 +637,30 @@ if __name__ == "__main__":
         default=None,
         help="WandB run name (optional, defaults to output_dir name)"
     )
+    parser.add_argument(
+        "--ke-loss", action="store_true",
+        help="Three-term objective: CE on the Self-Study answers + a bounded forget term on "
+             "each edit's own question completed with the OLD answer + KL to the frozen base "
+             "on the neighbour prompts. OFF by default (plain CE, as every run so far)."
+    )
+    parser.add_argument(
+        "--ke-data-file", type=str, default=str(Path(__file__).resolve().parent / "samples" / "CounterFact.json"),
+        help="CounterFact JSON the forget and retain sets are built from (--ke-loss only)"
+    )
+    parser.add_argument("--lambda-forget", type=float, default=1.0, help="weight of the forget term")
+    parser.add_argument("--lambda-retain", type=float, default=1.0, help="weight of the KL retain term")
+    parser.add_argument("--tau", type=float, default=None,
+                        help="log-prob threshold of the forget hinge (default log(0.05))")
+    parser.add_argument("--ke-forget-batch", type=int, default=4, help="forget sequences per step")
+    parser.add_argument("--ke-retain-batch", type=int, default=4, help="retain sequences per step")
+    parser.add_argument("--ke-max-edits", type=int, default=0,
+                        help="build the KE sets from the first N edits only (canary runs)")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for LoRA init and data order (default: unset = historical behaviour; the train/val split is always seed 42)"
+    )
     
     args = parser.parse_args()
     
@@ -483,4 +685,13 @@ if __name__ == "__main__":
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         wandb_run_name=args.wandb_run_name,
+        seed=args.seed,
+        ke_loss=args.ke_loss,
+        ke_data_file=args.ke_data_file,
+        lambda_forget=args.lambda_forget,
+        lambda_retain=args.lambda_retain,
+        tau=args.tau,
+        ke_forget_batch=args.ke_forget_batch,
+        ke_retain_batch=args.ke_retain_batch,
+        ke_max_edits=args.ke_max_edits,
     )
