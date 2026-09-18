@@ -108,6 +108,31 @@ def request_pair(entry):
     return prompt, (ans if ans.startswith(" ") else " " + ans)
 
 
+def prompt_variants(entry, paraphrases=True):
+    """The phrasings an edit should hold under: the request prompt and its paraphrases."""
+    rw = entry["requested_rewrite"]
+    subject = rw["subject"]
+    prompts = [rw["prompt"].format(subject)]
+    if paraphrases:
+        prompts += [p.replace("{}", subject) if "{}" in p else p
+                    for p in entry.get("paraphrase_prompts", [])]
+    return prompts
+
+
+def edit_pairs(entry, side, paraphrases=True):
+    """(prompt, answer) pairs for knowledge EDITING.
+
+    side="old" is what the edit must stop saying, side="new" what it must start saying.
+    Both use the same prompts, so one closed-form solve can push the old answer down and
+    the new one up at exactly the positions where the answer is produced.
+    """
+    rw = entry["requested_rewrite"]
+    tgt = rw["target_true"] if side == "old" else rw["target_new"]
+    ans = tgt["str"] if isinstance(tgt, dict) else str(tgt)
+    ans = ans if ans.startswith(" ") else " " + ans
+    return [(p, ans) for p in prompt_variants(entry, paraphrases)]
+
+
 def neighborhood_pairs(entry):
     """(neighborhood prompt, target_true) pairs.
 
@@ -389,8 +414,14 @@ def gen_probe(model, tok, device, system, max_new_tokens=60):
     return out
 
 
-def apply_erase(model, tok, device, forget_seqs, retain_seqs, alpha, args, report):
-    """GROM's closed-form update on the LM head and/or an MLP band, in place."""
+def apply_erase(model, tok, device, forget_seqs, retain_seqs, alpha, args, report,
+                insert_seqs=None):
+    """GROM's closed-form update on the LM head and/or an MLP band, in place.
+
+    With --beta-new the head target gets a second block of columns: the same prompts
+    completed with the NEW answer, whose rows are pushed UP instead of down. One solve,
+    one P, and the retain term keeps protecting the neighbours either way.
+    """
     t0 = time.time()
     vocab_size, d_model = model.lm_head.weight.shape
 
@@ -436,32 +467,49 @@ def apply_erase(model, tok, device, forget_seqs, retain_seqs, alpha, args, repor
         del uhat
         torch.cuda.empty_cache() if device.startswith("cuda") else None
 
-    if args.beta_head > 0:
-        Hf, idx = forward_collect(model, tok, fi, fl, device, module=None,
-                                  bs=args.batch_size, max_cols=args.forget_cols)
+    if args.beta_head > 0 or args.beta_new > 0:
         Hr, _ = forward_collect(model, tok, ri, rl, device, module=None,
                                 bs=args.batch_size, max_cols=args.retain_cols)
-        gold = (flat_gold[idx] if idx is not None else flat_gold).to(device)
-        s = Hf.shape[1]
-        # B = D Hf^T / s for the sparse target D[:, j] = -beta*alpha_j*e_{g_j},
-        # accumulated directly instead of materialising a (vocab, s) matrix.
         sdev = args.solve_device or device
-        gold_s = gold.to(sdev)
+        # One block per target side: (keys, gold tokens, signed strength, alpha-weighted).
+        # Suppression is alpha-weighted (GROM's specificity); insertion is not -- alpha
+        # exists to protect tokens the retain set needs, which is the retain term's job
+        # on this side.
+        blocks = []
+        if args.beta_head > 0:
+            Hf, idx = forward_collect(model, tok, fi, fl, device, module=None,
+                                      bs=args.batch_size, max_cols=args.forget_cols)
+            blocks.append((Hf, (flat_gold[idx] if idx is not None else flat_gold).to(device),
+                           -args.beta_head, True))
+        if args.beta_new > 0 and insert_seqs is not None:
+            ii, il, ig = insert_seqs
+            flat_new = torch.tensor([g for gs in ig for g in gs])
+            Hi, idx_i = forward_collect(model, tok, ii, il, device, module=None,
+                                        bs=args.batch_size, max_cols=args.forget_cols)
+            blocks.append((Hi, (flat_new[idx_i] if idx_i is not None else flat_new).to(device),
+                           args.beta_new, False))
+
+        Hf_all = torch.cat([b[0] for b in blocks], dim=1)
+        s = Hf_all.shape[1]
+        # B = D Hf^T / s for the sparse target (column j puts +-beta on row g_j),
+        # accumulated directly instead of materialising a (vocab, s) matrix.
         Bsup = torch.zeros(vocab_size, d_model, dtype=torch.float64, device=sdev)
-        Hf64 = Hf.double().to(sdev)
-        Bsup.index_add_(0, gold_s,
-                        Hf64.T * (-(alpha[gold].double().to(sdev)
-                                    * args.beta_head / s).unsqueeze(1)))
-        del Hf64
-        P = solve_update(Hf, Hr, args.w_r, args.rho, sdev, B=Bsup)
+        for K, gold, beta, use_alpha in blocks:
+            w = alpha[gold].double() if use_alpha else torch.ones(len(gold), dtype=torch.float64)
+            K64 = K.double().to(sdev)
+            Bsup.index_add_(0, gold.to(sdev), K64.T * ((w.to(sdev) * beta / s).unsqueeze(1)))
+            del K64
+        P = solve_update(Hf_all, Hr, args.w_r, args.rho, sdev, B=Bsup)
         del Bsup
         model.lm_head.weight.data.add_(P.to(model.lm_head.weight.device,
                                             model.lm_head.weight.dtype))
-        entry = {"matrix": "lm_head", "forget_keys": Hf.shape[1],
+        entry = {"matrix": "lm_head", "forget_keys": blocks[0][0].shape[1] if args.beta_head > 0 else 0,
+                 "insert_keys": blocks[-1][0].shape[1] if args.beta_new > 0 else 0,
                  "retain_keys": Hr.shape[1], "P_fro": float(P.float().norm())}
         report["edits"].append(entry)
-        print(f"[{time.time()-t0:.0f}s] edited lm_head: Hf={tuple(Hf.shape)} "
-              f"Hr={tuple(Hr.shape)} ||P||_F={entry['P_fro']:.3f}", flush=True)
+        print(f"[{time.time()-t0:.0f}s] edited lm_head: suppress_keys={entry['forget_keys']} "
+              f"insert_keys={entry['insert_keys']} Hr={tuple(Hr.shape)} "
+              f"||P||_F={entry['P_fro']:.3f}", flush=True)
 
     report["edit_seconds"] = round(time.time() - t0, 1)
     for key in ("_subj_forget", "_subj_retain", "_subj_gold"):
@@ -496,6 +544,14 @@ def main():
     ap.add_argument("--chat-system", default=DEFAULT_SYSTEM)
     # GROM knobs; defaults are the authors' ZsRE fact-editing configuration.
     ap.add_argument("--beta-head", type=float, default=20.0)
+    ap.add_argument("--beta-new", type=float, default=0.0,
+                    help="strength of the INSERT side: push the NEW target up at the same "
+                         "positions the old one is pushed down, turning the erase into a "
+                         "knowledge edit. 0 (default) = erase only, unchanged behaviour")
+    ap.add_argument("--no-paraphrase-keys", dest="paraphrase_keys", action="store_false",
+                    default=True,
+                    help="edit mode only: use the request prompt alone instead of the "
+                         "request prompt plus its paraphrases")
     ap.add_argument("--beta-mlp", type=float, default=0.0)
     ap.add_argument("--layers", default="", help="MLP band, e.g. 18,19,20,21,22 (beta-mlp>0 only)")
     ap.add_argument("--mlp-key-pos", choices=["answer", "subject_last"], default="subject_last")
@@ -559,7 +615,18 @@ def main():
         return
     retain_entries = retain_pool[:args.retain_facts] if args.retain_facts > 0 else retain_pool
 
-    forget_pairs = [request_pair(e) for e in forget_entries]
+    edit_mode = args.beta_new > 0
+    if edit_mode:
+        # Knowledge editing: suppress the old answer AND install the new one, at the
+        # request prompt and (by default) its paraphrases, so the edit is not tied to one
+        # phrasing. Pure erase keeps its request-prompt-only key set.
+        forget_pairs = [p for e in forget_entries
+                        for p in edit_pairs(e, "old", args.paraphrase_keys)]
+        insert_pairs = [p for e in forget_entries
+                        for p in edit_pairs(e, "new", args.paraphrase_keys)]
+    else:
+        forget_pairs = [request_pair(e) for e in forget_entries]
+        insert_pairs = []
     retain_fact_pairs = [request_pair(e) for e in retain_entries]
     if args.attribute_retain or not retain_fact_pairs:
         # No disjoint edits left (or explicitly asked for): anchor on attribute prompts.
@@ -576,6 +643,7 @@ def main():
         tok.pad_token = tok.eos_token
 
     fi, fl, fg = tokenize_pairs(tok, forget_pairs, forms, args.chat_system)
+    insert_seqs = tokenize_pairs(tok, insert_pairs, forms, args.chat_system) if insert_pairs else None
     ri, rl, rg = tokenize_pairs(tok, retain_fact_pairs + neigh_pairs, forms,
                                 args.chat_system, want_gold=True)
     n_fact_retain_seqs = len(ri)   # wiki lines are appended after this point
@@ -619,7 +687,11 @@ def main():
         "forget_sequences": len(fi), "retain_sequences": len(ri),
         "forget_key_positions": sum(len(g) for g in fg),
         "specificity": not args.no_specificity, "mean_alpha": round(mean_alpha, 4),
-        "beta_head": args.beta_head, "beta_mlp": args.beta_mlp, "layers": args.layers,
+        "beta_head": args.beta_head, "beta_new": args.beta_new,
+        "edit_mode": edit_mode, "paraphrase_keys": args.paraphrase_keys,
+        "insert_sequences": len(insert_seqs[0]) if insert_seqs else 0,
+        "insert_key_positions": sum(len(g) for g in insert_seqs[2]) if insert_seqs else 0,
+        "beta_mlp": args.beta_mlp, "layers": args.layers,
         "mlp_key_pos": args.mlp_key_pos, "w_r": args.w_r, "rho": args.rho,
     }
     print(json.dumps(report, indent=2), flush=True)
@@ -688,6 +760,7 @@ def main():
             [g[0] for g in fg for _ in range(1)][:len(report["_subj_forget"][0])])
 
     probe_sets = {"forget": forget_pairs,
+                  "insert": insert_pairs,
                   "retain_facts": retain_fact_pairs,
                   "neighborhood": neigh_pairs}
     if not args.no_probe:
@@ -702,7 +775,8 @@ def main():
                     limit=args.probe_limit)
                 print(f"  before  {key:22s} {report['recall_before'][key]}", flush=True)
 
-    apply_erase(model, tok, args.device, (fi, fl, fg), (ri, rl, None), alpha, args, report)
+    apply_erase(model, tok, args.device, (fi, fl, fg), (ri, rl, None), alpha, args, report,
+                insert_seqs=insert_seqs)
 
     if not args.no_probe:
         report["recall_after"] = {}
