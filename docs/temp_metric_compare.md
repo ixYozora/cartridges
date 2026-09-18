@@ -169,6 +169,30 @@ installs nothing.
 
 ---
 
+## 7. Three-term objective (CE + forget + KL retain): rejected
+
+`checkpoints/lora-keloss-mild` (`results/lora-20260918_015035`), DCT data, stock base,
+hinge active while the old answer is above 5%, both weights 1.0. Against the DCT baseline,
+judge v2:
+
+| Metric | Δ |
+|---|---|
+| Efficacy success | **−11.38 [−14.15, −8.62] \*** |
+| Generalization success | **−22.06 [−24.56, −19.60] \*** |
+| Portability success | **−13.70 [−16.21, −11.28] \*** |
+| OVERALL success | **−12.14 [−13.46, −10.82] \*** |
+| Names new target | **−15.08 [−16.72, −13.46] \*** |
+| Judge: old fact asserted | **+1.13 [+0.08, +2.11] \*** (worse) |
+| Locality success | −1.03 [−3.18, +0.98] |
+| Locality: edit carried over | +0.10 [−1.70, +1.91] |
+
+The forget set is each edit's own question, the same position where the new answer must be
+produced, so the two terms compete and CE loses. The old fact is not reduced: a model that
+fails to give the new value falls back on the old one. The KL retain term did not protect
+locality either. See CHANGELOG 2026-09-18 for the canary trade-off curve.
+
+---
+
 ## Other comparisons (v2)
 
 - **Enriched -> DCT**: null (OVERALL +0.21 [−0.98, +1.36]; judge old-fact −0.10).

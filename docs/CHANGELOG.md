@@ -11,6 +11,52 @@ estimate.
 
 ---
 
+## 2026-09-18 — The three-term objective, rebuilt and tested: negative result
+
+Jobs 12076–12081 (canaries), 12082 (training, 4h22m), 12087 (eval, 3h05m).
+Adapter `checkpoints/lora-keloss-mild`, results `results/lora-20260918_015035`.
+
+**The rebuild fixed the August defect.** That version searched the Self-Study targets for
+the old answer and found almost nothing, because `fidelity_filter.py` had already removed
+those rows: the forget term fired on 0 tokens in 392 of 457 steps. `KESets` now builds an
+explicit forget set (each edit's question and paraphrases completed with the old answer,
+2,922 sequences) and a retain set (neighbour prompts with their own correct answer, 1,950).
+The hinge was active in 59% of early steps, falling to 1.6% by the end.
+
+**Canary (1 epoch, 200 edits) mapped the trade-off**, with plain CE as the control:
+
+| | old-answer rank (plain/chat) | old top-1 | new-answer rank |
+|---|---|---|---|
+| stock | 19.5 / 9 | 14.0% / 22.5% | 263 / 236 |
+| plain CE | 14.5 / 4 | 15.0% / 21.0% | 117 / 19 |
+| hinge below 5% | 30 / 7 | 1.0% / 13.0% | 215 / 35.5 |
+| below 0.1% | 223 / 21.5 | 0.0% / 8.0% | 620 / 87 |
+| below 0.001%, x2 | 2186 / 110 | 0.0% / 4.5% | 3332 / 436 |
+
+Two things to keep: **plain finetuning makes the old answer MORE likely** (rank 19.5 -> 14.5),
+so any drop under the objective is the forget term, not a side effect. And forget strength
+buys old-answer suppression by paying in new-answer rank.
+
+**At full scale the trade is bad.** Same data, same stock base, same best-validation
+checkpoint (2500, val loss 0.452 vs the baseline's 0.439); only the objective differs.
+Against the DCT baseline under judge v2: efficacy −11.38 \*, generalization −22.06 \*,
+portability −13.70 \*, OVERALL −12.14 \*, names-new −15.08 \*. The old fact is **not**
+reduced — judge old-fact +1.13 \* overall, +2.97 \* on efficacy — because a model that
+fails to produce the new value falls back on the old one. Locality is unchanged (−1.03,
+n.s.), so **the KL retain term did not protect the neighbours** either.
+
+**Mechanism.** The forget set is each edit's own question: exactly the position where the
+new answer has to be produced. Suppressing the old value and installing the new one there
+are in direct competition, and CE loses. GROM's closed-form erase avoids this because it
+happens before training, outside the optimisation.
+
+**Conclusion for the thesis.** Two loss-side attempts at removing the old fact have now
+failed for identifiable reasons (teacher erase: context echo; forget term: competition at
+the answer position), while the closed-form erase of the student works and partly survives
+finetuning. Suppression belongs outside the objective, not inside it.
+
+---
+
 ## 2026-09-17 — Locality measured properly; judge v2 runs inside the eval job; scripts archived
 
 **Locality was the last lenient metric.** v1 only asked whether the edited subject was
