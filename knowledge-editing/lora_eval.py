@@ -21,6 +21,7 @@ Usage:
 
 import inspect
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 import torch
 import json
 import re
@@ -578,6 +579,86 @@ def generate_akew_test_cases(
     # Return all test cases (should be within max_tests_per_sample)
     return test_cases
 
+EMPTY_JUDGE = {"judge_score": 0, "judge_reason": "", "judge_failed": 0, "success": 0}
+
+
+def judge_fields(test_case, question, answer, judge_version="v2",
+                 judge_base_url="http://localhost:10310", judge_model=DEFAULT_JUDGE_MODEL,
+                 judge_with_evaluated_model=False, model=None, tokenizer=None) -> Dict[str, Any]:
+    """Grade one answer and return the judge columns.
+
+    Split out of evaluate_single_test_case so a whole entry's tests can be judged
+    concurrently: judging is one blocking HTTP call per test, and with the 9B judge
+    running in-line that dominated the wall clock (~2.5 s x 6,825 tests).
+    """
+    if judge_version == "v2":
+        # judge v2: the judge extracts what the answer says, then answers two yes/no
+        # checks; success is derived from those in code (see judge_v2.py). No 0-5 score.
+        res = judge_v2.judge_case(judge_base_url, judge_model, test_case, question, answer)
+        failed = bool(res["judge_failed"])
+        return {"judge_score": "", "judge_reason": res["reason"], "judge_failed": int(failed),
+                "success": "" if failed else int(bool(res["success"])),
+                "judge_new": res.get("judge_new"), "judge_old": res.get("judge_old"),
+                "judge_bleed": res.get("judge_bleed"), "judge_grounded": res.get("grounded"),
+                "judge_extracted": res.get("extracted"), "judge_version": "v2",
+                "locality_pool": test_case.get("locality_pool", "")}
+
+    if test_case['judge_type'] == 'efficacy':
+        judge_prompt = EFFICACY_JUDGE_PROMPT.format(
+            question=question,
+            response=answer,
+            new_fact=test_case['new_fact'],
+            old_fact=test_case['old_fact']
+        )
+    elif test_case['judge_type'] == 'locality':
+        judge_prompt = LOCALITY_JUDGE_PROMPT.format(
+            question=question,
+            response=answer,
+            locality_subject=test_case['locality_subject'],
+            edited_subject=test_case['edited_subject']
+        )
+    elif test_case['judge_type'] == 'generalization':
+        judge_prompt = GENERALIZATION_JUDGE_PROMPT.format(
+            question=question,
+            response=answer,
+            new_fact=test_case['new_fact']
+        )
+    elif test_case['judge_type'] == 'portability':
+        judge_prompt = PORTABILITY_JUDGE_PROMPT.format(
+            question=question,
+            response=answer,
+            new_fact=test_case['new_fact'],
+            expected_reasoning=test_case.get('expected_reasoning', '')
+        )
+    
+    if judge_with_evaluated_model:
+        judge_res = ask_judge_local(
+            model, tokenizer, judge_prompt, judge_type=test_case["judge_type"]
+        )
+    else:
+        judge_res = ask_judge_http(
+            judge_prompt,
+            judge_type=test_case["judge_type"],
+            base_url=judge_base_url,
+            model=judge_model,
+        )
+    if judge_with_evaluated_model:
+        judge_res = ask_judge_local(
+            model, tokenizer, judge_prompt, judge_type=test_case["judge_type"]
+        )
+    else:
+        judge_res = ask_judge_http(
+            judge_prompt,
+            judge_type=test_case["judge_type"],
+            base_url=judge_base_url,
+            model=judge_model,
+        )
+    score = judge_res.get("score", 0)
+    return {"judge_score": score, "judge_reason": judge_res.get("reason", ""),
+            "judge_failed": 1 if judge_res.get("judge_failed") else 0,
+            "success": 1 if score >= 4 else 0}
+
+
 def evaluate_single_test_case(
     test_case: Dict[str, Any],
     model,
@@ -589,8 +670,12 @@ def evaluate_single_test_case(
     judge_base_url: str = "http://localhost:10210",
     judge_model: str = DEFAULT_JUDGE_MODEL,
     judge_version: str = "v2",
+    defer_judge: bool = False,
 ) -> Dict[str, Any]:
-    """Evaluate a single test case and return all metrics"""
+    """Evaluate a single test case and return all metrics.
+
+    defer_judge leaves the judge columns empty so the caller can grade a whole entry's
+    tests in parallel (see run_comprehensive_eval)."""
     question = test_case['q']
     test_type = test_case['type']
     
@@ -619,72 +704,14 @@ def evaluate_single_test_case(
         test_type=test_case['judge_type'],
     ) else 0
     
-    # LLM Judge evaluation
-    judge_score = 0
-    judge_reason = ""
-    judge_failed = 0
-    v2 = {}
-    if use_judge and judge_version == "v2":
-        # judge v2: the judge extracts what the answer says, then answers two yes/no
-        # checks; success is derived from those in code (see judge_v2.py). No 0-5 score.
-        res = judge_v2.judge_case(judge_base_url, judge_model, test_case, question, answer)
-        judge_score = ""
-        judge_reason = res["reason"]
-        judge_failed = 1 if res["judge_failed"] else 0
-        v2 = {"judge_new": res.get("judge_new"), "judge_old": res.get("judge_old"),
-              "judge_bleed": res.get("judge_bleed"), "judge_grounded": res.get("grounded"),
-              "judge_extracted": res.get("extracted"), "judge_version": "v2",
-              "locality_pool": test_case.get("locality_pool", ""),
-              "success_v2": res["success"]}
-    elif use_judge:
-        if test_case['judge_type'] == 'efficacy':
-            judge_prompt = EFFICACY_JUDGE_PROMPT.format(
-                question=question,
-                response=answer,
-                new_fact=test_case['new_fact'],
-                old_fact=test_case['old_fact']
-            )
-        elif test_case['judge_type'] == 'locality':
-            judge_prompt = LOCALITY_JUDGE_PROMPT.format(
-                question=question,
-                response=answer,
-                locality_subject=test_case['locality_subject'],
-                edited_subject=test_case['edited_subject']
-            )
-        elif test_case['judge_type'] == 'generalization':
-            judge_prompt = GENERALIZATION_JUDGE_PROMPT.format(
-                question=question,
-                response=answer,
-                new_fact=test_case['new_fact']
-            )
-        elif test_case['judge_type'] == 'portability':
-            judge_prompt = PORTABILITY_JUDGE_PROMPT.format(
-                question=question,
-                response=answer,
-                new_fact=test_case['new_fact'],
-                expected_reasoning=test_case.get('expected_reasoning', '')
-            )
-        
-        if judge_with_evaluated_model:
-            judge_res = ask_judge_local(
-                model, tokenizer, judge_prompt, judge_type=test_case["judge_type"]
-            )
-        else:
-            judge_res = ask_judge_http(
-                judge_prompt,
-                judge_type=test_case["judge_type"],
-                base_url=judge_base_url,
-                model=judge_model,
-            )
-        judge_score = judge_res.get("score", 0)
-        judge_reason = judge_res.get("reason", "")
-        judge_failed = 1 if judge_res.get("judge_failed") else 0
-
-    if v2:
-        success = "" if judge_failed else int(bool(v2.pop("success_v2")))
-    else:
-        v2.pop("success_v2", None)
-        success = 1 if judge_score >= 4 else 0
+    judge = (judge_fields(test_case, question, answer, judge_version, judge_base_url,
+                          judge_model, judge_with_evaluated_model, model, tokenizer)
+             if (use_judge and not defer_judge) else dict(EMPTY_JUDGE))
+    judge_score = judge.pop("judge_score")
+    judge_reason = judge.pop("judge_reason")
+    judge_failed = judge.pop("judge_failed")
+    success = judge.pop("success")
+    v2 = judge
     
     result = {
         "question": question,
@@ -712,6 +739,20 @@ def evaluate_single_test_case(
     
     return result
 
+def print_judge_line(result):
+    """One line per judged test: v1 prints its 0-5 score, v2 its pass/fail verdict."""
+    if result.get('judge_failed'):
+        print(f"Judge: \033[91mFAILED\033[0m - {result['judge_reason'][:150]}")
+    elif isinstance(result['judge_score'], (int, float)):
+        score = result['judge_score']
+        color = "\033[92m" if score >= 4 else ("\033[93m" if score >= 3 else "\033[91m")
+        print(f"Judge: {color}{score}/5\033[0m - {result['judge_reason']}")
+    else:
+        ok = result['success'] == 1
+        color = "\033[92m" if ok else "\033[91m"
+        print(f"Judge: {color}{'pass' if ok else 'fail'}\033[0m - {result['judge_reason']}")
+
+
 def run_comprehensive_eval(
     sample_data: List[Dict[str, Any]],
     model,
@@ -729,6 +770,7 @@ def run_comprehensive_eval(
     judge_version: str = "v2",
     partial_path: str = None,
     partial_every: int = 50,
+    judge_workers: int = 8,
 ) -> Dict[str, Any]:
     """Run comprehensive evaluation on AKEW data.
 
@@ -767,7 +809,11 @@ def run_comprehensive_eval(
             print(f"Generated {len(test_cases)} test cases")
         
         entry_results = []
-        
+        # One entry's tests are judged together afterwards: the judge is a blocking HTTP
+        # call per test, so doing them concurrently cuts the wall clock roughly by the
+        # number of tests per entry. Generation stays sequential (one model, one GPU).
+        defer = use_judge and judge_workers > 1
+
         for i, test_case in enumerate(test_cases):
             if verbose:
                 print(f"\n[Test {i+1}/{len(test_cases)}] Type: \033[1m{test_case['type']}\033[0m")
@@ -784,6 +830,7 @@ def run_comprehensive_eval(
                 judge_version=judge_version,
                 judge_base_url=judge_base_url,
                 judge_model=judge_model,
+                defer_judge=defer,
             )
             all_results.append(result)
             results_by_type[test_case['type']].append(result)
@@ -794,19 +841,23 @@ def run_comprehensive_eval(
                 print(f"A: \033[94m{answer[:200]}{'...' if len(answer) > 200 else ''}\033[0m")
                 print(f"Metrics: ROUGE-L={result['rouge_l']:.3f}, BERTScore={result['bert']:.3f}, "
                       f"EM={result['exact_match']*100:.1f}%")
-                if use_judge:
-                    if result.get('judge_failed'):
-                        print(f"Judge: \033[91mFAILED\033[0m - {result['judge_reason'][:150]}")
-                    elif isinstance(result['judge_score'], (int, float)):
-                        score = result['judge_score']
-                        color = "\033[92m" if score >= 4 else ("\033[93m" if score >= 3 else "\033[91m")
-                        print(f"Judge: {color}{score}/5\033[0m - {result['judge_reason']}")
-                    else:
-                        # judge v2 has no 0-5 score; its verdict is the success flag
-                        ok = result['success'] == 1
-                        color = "\033[92m" if ok else "\033[91m"
-                        print(f"Judge: {color}{'pass' if ok else 'fail'}\033[0m - {result['judge_reason']}")
+                if use_judge and not defer:
+                    print_judge_line(result)
                 print("-" * 80)
+
+        if defer:
+            with ThreadPoolExecutor(min(judge_workers, max(1, len(entry_results)))) as ex:
+                verdicts = list(ex.map(
+                    lambda pair: judge_fields(pair[1], pair[0]["question"], pair[0]["answer"],
+                                              judge_version, judge_base_url, judge_model,
+                                              judge_with_evaluated_model, model, tokenizer),
+                    list(zip(entry_results, test_cases))))
+            for result, verdict in zip(entry_results, verdicts):
+                result.update({k: ("" if v is None else (int(v) if isinstance(v, bool) else v))
+                               for k, v in verdict.items()})
+                if verbose:
+                    print(f"[{result['type']}] {result['question'][:60]!r}")
+                    print_judge_line(result)
         
         results_by_entry[str(entry_id)] = {
             "entry_id": entry_id,
