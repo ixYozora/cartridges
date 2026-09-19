@@ -727,8 +727,16 @@ def run_comprehensive_eval(
     judge_base_url: str = "http://localhost:10210",
     judge_model: str = DEFAULT_JUDGE_MODEL,
     judge_version: str = "v2",
+    partial_path: str = None,
+    partial_every: int = 50,
 ) -> Dict[str, Any]:
-    """Run comprehensive evaluation on AKEW data."""
+    """Run comprehensive evaluation on AKEW data.
+
+    With partial_path set, the answers so far are dumped every `partial_every` entries.
+    A full CounterFact run takes hours and used to write results only at the very end, so
+    a Slurm wall clock (or any crash) threw all of it away -- jobs 12178/12179 were headed
+    for exactly that at ~480 of 975 entries.
+    """
     all_results = []
     results_by_type = {
         "Efficacy": [],
@@ -806,6 +814,15 @@ def run_comprehensive_eval(
             "results": entry_results,
             "num_tests": len(entry_results)
         }
+
+        if partial_path and (entry_idx + 1) % partial_every == 0:
+            Path(partial_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(partial_path, "w") as fh:
+                json.dump({"entries_done": entry_idx + 1,
+                           "entries_total": len(sample_data),
+                           "detailed_results": all_results}, fh)
+            print(f"[partial] {entry_idx + 1}/{len(sample_data)} entries -> {partial_path}",
+                  flush=True)
     
     # Calculate summary statistics
     summary = {}
@@ -1111,6 +1128,8 @@ if __name__ == "__main__":
         judge_version=args.judge_version,
         judge_base_url=args.judge_base_url,
         judge_model=args.judge_model,
+        partial_path=(str(Path(args.output).parent / "eval_partial.json")
+                      if args.output else None),
     )
 
     run_dir, stem_path = resolve_eval_output_dir(
