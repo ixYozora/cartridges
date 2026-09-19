@@ -34,7 +34,10 @@ run () {
         --report-out $CK/qwen2.5-7b-ke-$tag/grom_report.json
 }
 
-run insert80    --beta-head 0  --beta-new 80
-run sup20ins80  --beta-head 20 --beta-new 80
-run sup80ins80  --beta-head 80 --beta-new 80
+# Strengths from the FULL-SCALE sweep (job 12176). The 50-edit operating point
+# (beta_new 80) leaves the new answer at rank ~50 once all 975 edits share one solve;
+# 320 reaches rank 1-2 with the fluency canary still clean, 640+ breaks generation unless
+# suppression counteracts it (sup160ins640 is fluent but moves the neighbours 29 -> 35).
+run ins320       --beta-head 0   --beta-new 320
+run sup160ins640 --beta-head 160 --beta-new 640
 echo "done: $(ls -d $CK/qwen2.5-7b-ke-* | tr '\n' ' ')"
