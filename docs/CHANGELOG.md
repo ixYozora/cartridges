@@ -11,6 +11,45 @@ estimate.
 
 ---
 
+## 2026-09-20 — GROM as an editor: installs facts only at strengths that degenerate the edited answers
+
+Jobs 12094 (50-edit sweep), 12095/12177 (full-scale edits), 12175 (probe), 12176
+(full-scale strength sweep), 12096-12098 and 12198/12199 (evals, no adapter).
+`grom_erase.py --beta-new` adds a second block of columns to the same closed-form solve:
+the same prompts completed with the NEW answer, whose rows are pushed up. One solve, one
+P on the LM head, retain side unchanged.
+
+**At 50 edits it works cleanly**: beta_new 80 moves the new answer from rank 313 to 1
+(plain) and 662 to 1 (chat) with the neighbours unmoved, and suppression composes
+(80/80 also buries the old answer at ~20,800).
+
+**At 975 edits the same strength does almost nothing**: the new answer only reaches rank
+~50 (probe 12175), because all edits share one least-squares solve and dilute each other,
+and the specificity weight drops from 0.93 to 0.39 once no held-out facts remain. In
+generation the model named the new target in 9% of efficacy answers.
+
+**Raising the strength installs the fact but breaks the edited answers.** beta_new 320
+reaches rank 1-2 at full scale, and the eval confirms real gains over the unedited model
+(efficacy 1.44 -> 20.64, +19.20 \*; portability +17.59 \*; old-fact leak −4.54 \*), with
+**locality untouched (−0.57, n.s.) and 8.90 \* better than the LoRA baseline**. But it is
+far below LoRA (efficacy −64.40 \*, generalization −49.54 \*), and the answers on the
+edited facts degenerate: median answer length 513 -> 954 characters, with the inserted
+token repeating ("was Christianity and Christianity was later supplanted by
+Christianity..."). The new target appears in 33.8% of efficacy answers but only 20.6%
+count as success.
+
+**Methodological finding: the fluency canary was blind to this.** It generated only from
+generic prompts ("why is the sky blue"), which stayed at rep4 0.000 while the edited
+subjects degenerated, so it promoted a configuration whose edited answers are unusable.
+The canary now also generates from the edited subjects and reports their rep4 separately.
+
+**Reading.** The closed-form route keeps the property LoRA loses -- it does not damage
+neighbouring facts -- but at 975 simultaneous edits it cannot install facts without
+wrecking the text at exactly the positions it edits. A single head matrix is the
+bottleneck: one solve has to satisfy 5,850 forget and insert columns at once.
+
+---
+
 ## 2026-09-18 — The three-term objective, rebuilt and tested: negative result
 
 Jobs 12076–12081 (canaries), 12082 (training, 4h22m), 12087 (eval, 3h05m).

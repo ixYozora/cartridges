@@ -193,6 +193,32 @@ locality either. See CHANGELOG 2026-09-18 for the canary trade-off curve.
 
 ---
 
+## 8. GROM as an editor (closed form, no LoRA)
+
+`--beta-new` pushes the NEW answer up in the same solve that pushes the old one down.
+All 975 edits, judge v2, evaluated with no adapter.
+
+| | unedited | beta_new 80 | **beta_new 320** | sup160+ins640 | DCT LoRA |
+|---|---|---|---|---|---|
+| Efficacy | 1.4 | 4.4 | **20.6** | 22.6 | 85.0 |
+| Generalization | 1.2 | 3.0 | 8.5 | 9.6 | 58.1 |
+| Portability | 0.6 | 3.0 | 18.2 | 20.1 | 56.0 |
+| **Locality** | 40.6 | 40.9 | **39.8** | 38.8 | **30.8** |
+| Old-fact leak | 27.8 | 19.7 | 15.3 | 14.5 | 7.4 |
+| Median answer length | 513 | 508 | **954** | — | 58 |
+
+- vs unedited (beta_new 320): efficacy **+19.20 \***, portability **+17.59 \***,
+  generalization **+7.28 \***, leak **−4.54 \***, locality −0.57 (n.s.).
+- vs DCT LoRA: efficacy **−64.40 \***, generalization **−49.54 \***, portability
+  **−37.77 \***, but locality **+8.90 \***.
+
+**The trade.** At 50 edits beta_new 80 installs the fact perfectly (rank 313 -> 1); at 975
+it leaves it at rank ~50, because the edits share one solve. Strength 320 installs it but
+the edited answers degenerate (the inserted token repeats; length 513 -> 954), which the
+old fluency canary missed because it only probed generic prompts.
+
+---
+
 ## Other comparisons (v2)
 
 - **Enriched -> DCT**: null (OVERALL +0.21 [−0.98, +1.36]; judge old-fact −0.10).
