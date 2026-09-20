@@ -385,16 +385,22 @@ GEN_PROBE_PROMPTS = [
 
 
 @torch.no_grad()
-def gen_probe(model, tok, device, system, max_new_tokens=60):
+def gen_probe(model, tok, device, system, max_new_tokens=60, edit_prompts=None):
     """Free-form fluency canary: greedy generations plus a degeneracy statistic.
 
     The recall probes only cover FACTUAL collateral. An over-strong edit shows up as
     broken generation instead -- repetition loops, refusal to stop -- which the rank
     probes would not catch. `rep4` is the fraction of repeated 4-grams; healthy text
     on these prompts sits near 0.
+
+    Generic prompts alone are NOT enough: at beta_new 320 they stayed at rep4 0.000
+    while the edited subjects themselves degenerated ("was Christianity and Christianity
+    was later supplanted by Christianity...", eval 12198). The degeneracy is local to the
+    states the edit targets, so `edit_prompts` (the edited subjects' own questions) are
+    probed as well and reported with kind="edited".
     """
     out = []
-    for prompt in GEN_PROBE_PROMPTS:
+    for prompt in GEN_PROBE_PROMPTS + list(edit_prompts or []):
         msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": prompt}]
         try:
@@ -410,6 +416,7 @@ def gen_probe(model, tok, device, system, max_new_tokens=60):
         grams = [tuple(new[i:i + 4]) for i in range(max(0, len(new) - 3))]
         rep4 = round(1 - len(set(grams)) / len(grams), 3) if grams else 0.0
         out.append({"prompt": prompt, "n_tokens": len(new), "rep4": rep4,
+                    "kind": "generic" if prompt in GEN_PROBE_PROMPTS else "edited",
                     "text": tok.decode(new, skip_special_tokens=True)[:220]})
     return out
 
@@ -751,7 +758,10 @@ def main():
         return
 
     if not args.no_probe:
-        report["gen_before"] = gen_probe(model, tok, args.device, args.chat_system)
+        # Probe the edited subjects too, not just generic prompts (see gen_probe).
+        edit_probe_prompts = [p for p, _ in forget_pairs[:8]]
+        report["gen_before"] = gen_probe(model, tok, args.device, args.chat_system,
+                                         edit_prompts=edit_probe_prompts)
 
     if args.beta_mlp > 0 and args.mlp_key_pos == "subject_last":
         report["_subj_forget"] = subject_last_keys(tok, forget_entries, forms, args.chat_system)
@@ -797,13 +807,17 @@ def main():
                       f"{after['mean_gold_logprob']:8.3f}", flush=True)
 
     if not args.no_probe:
-        report["gen_after"] = gen_probe(model, tok, args.device, args.chat_system)
-        worst = max(g["rep4"] for g in report["gen_after"])
+        report["gen_after"] = gen_probe(model, tok, args.device, args.chat_system,
+                                        edit_prompts=edit_probe_prompts)
+        worst = {k: max([g["rep4"] for g in report["gen_after"] if g["kind"] == k] or [0.0])
+                 for k in ("generic", "edited")}
         print(f"\n--- fluency canary: worst repeated-4gram fraction after edit = "
-              f"{worst:.3f} (healthy ~0) ---", flush=True)
+              f"generic {worst['generic']:.3f}, EDITED SUBJECTS {worst['edited']:.3f} "
+              f"(healthy ~0; the edited column is the one that degenerates first) ---",
+              flush=True)
         for g in report["gen_after"]:
-            print(f"  rep4={g['rep4']:.3f} n={g['n_tokens']:3d} | {g['text'][:110]!r}",
-                  flush=True)
+            print(f"  [{g['kind'][:7]:7s}] rep4={g['rep4']:.3f} n={g['n_tokens']:3d} | "
+                  f"{g['text'][:100]!r}", flush=True)
 
     if args.no_save:
         dest = Path(args.report_out or "grom_report.json")
