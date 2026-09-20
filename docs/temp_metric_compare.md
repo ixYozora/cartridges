@@ -219,6 +219,27 @@ old fluency canary missed because it only probed generic prompts.
 
 ---
 
+## 9. Edit-then-finetune (closed-form edit as the LoRA starting point)
+
+Same DCT data and hyperparameters; only the base model differs.
+
+| Run | Efficacy | Gen. | Port. | Locality | Leak | OVERALL |
+|---|---|---|---|---|---|---|
+| DCT LoRA (stock base) | 85.0 | 58.1 | 56.0 | 30.8 | 5.27 | 53.5 |
+| head160 erase + LoRA | 84.5 | 59.2 | 56.8 | **33.2** | 4.40 | 54.7 |
+| sup80ins80 edit + LoRA | 83.1 | 60.4 | 55.0 | **33.1** | 4.31 | 54.3 |
+| **ins320 edit + LoRA** | 86.1 | **69.1** | 57.5 | 30.6 | **3.99** | **57.2** |
+
+vs the DCT baseline: ins320 + LoRA gives generalization **+11.08 \***, OVERALL **+3.68 \***,
+leak **−1.29 \***, locality −0.26 (n.s.). vs head160 + LoRA: generalization **+9.95 \***,
+OVERALL +2.52 \*, locality −2.62 \*.
+
+`ins320` alone (no adapter) scored 20.6% efficacy with degenerate text — as a starting
+point it produces the strongest adapter measured. Finetuning repairs what the edit
+distorted and keeps what it installed.
+
+---
+
 ## Other comparisons (v2)
 
 - **Enriched -> DCT**: null (OVERALL +0.21 [−0.98, +1.36]; judge old-fact −0.10).

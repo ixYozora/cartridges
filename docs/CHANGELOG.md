@@ -11,6 +11,49 @@ estimate.
 
 ---
 
+## 2026-09-20 (later) — Capacity is the bottleneck, and edit-then-finetune is the best configuration yet
+
+**Capacity, not strength** (job 12204). The head edit solves one least-squares system whose
+keys live in 3,584 dimensions; at 975 edits x 3 phrasings x 2 key forms it has 5,850
+columns, so it can only compromise. Two ways out, both measured:
+
+| | columns | new answer rank (plain/chat) | neighbours | rep4 generic/edited |
+|---|---|---|---|---|
+| head, 1 phrasing, beta 320 | 986 | 274 -> 1 | 29 -> 28 | 0.000 / 0.070 |
+| **MLP band 16-20, beta 20** | 5,916 | **206 -> 2 / 406 -> 3** | **29 -> 26** | **0.018 / 0.035** |
+| MLP band, beta 65 | 5,916 | 1 / 1 | 29 -> 42 | 0.175 / 0.263 |
+| MLP band, beta 160 | 5,916 | 1 / 1 | 29 -> 169 | 0.088 / 0.088 |
+
+Spreading the insert over five matrices installs the fact at **1/16 the strength** the
+single head needed, keeping all phrasings and both key forms, with neighbours unharmed and
+the text clean. `--beta-new-mlp` implements this (the MLP path was suppression-only).
+
+**Edit-then-finetune** (jobs 12200-12203). LoRA on the DCT data, started from an edited
+base instead of the stock model:
+
+| vs DCT LoRA baseline | ins320 + LoRA | sup80ins80 + LoRA |
+|---|---|---|
+| Efficacy | +1.03 | −1.95 |
+| **Generalization** | **+11.08 [+8.51, +13.54] \*** | +2.36 |
+| Portability | +1.54 | −0.97 |
+| Locality | −0.26 | **+2.31 \*** |
+| Old-fact leak | **−1.29 \*** | **−0.97 \*** |
+| OVERALL | **+3.68 \*** | +0.78 |
+
+Against the previous best (head160 erase + LoRA), ins320 + LoRA is **generalization +9.95
+\***, OVERALL +2.52 \*, locality −2.62 \*.
+
+**The interesting part: the base that was unusable alone is the best starting point.**
+`ins320` on its own produced repetitive answers and 20.6% efficacy; as an initialisation it
+gives the strongest adapter we have measured. Finetuning repairs the text the edit
+distorted while keeping the facts it installed, which is the opposite of the intuition that
+a damaged base model makes a worse starting point.
+
+**Two operating points now exist:** ins320 + LoRA for capability (generalization 69.1), and
+erase- or suppression-style + LoRA for locality (33.1-33.2 vs 30.8).
+
+---
+
 ## 2026-09-20 — GROM as an editor: installs facts only at strengths that degenerate the edited answers
 
 Jobs 12094 (50-edit sweep), 12095/12177 (full-scale edits), 12175 (probe), 12176
