@@ -443,9 +443,10 @@ def apply_erase(model, tok, device, forget_seqs, retain_seqs, alpha, args, repor
     flat_gold = torch.tensor([g for gs in fg for g in gs])
     report["edits"] = []
 
-    if args.beta_mlp > 0 and args.layers:
+    if (args.beta_mlp > 0 or args.beta_new_mlp > 0) and args.layers:
         uhat = unit_unembeddings(model)
         subj = args.mlp_key_pos == "subject_last"
+        sdev_mlp = args.solve_device or device
         for layer in args.layers:
             down_proj = model.model.layers[layer].mlp.down_proj
             if subj:
@@ -460,8 +461,25 @@ def apply_erase(model, tok, device, forget_seqs, retain_seqs, alpha, args, repor
                 Kr, _ = forward_collect(model, tok, ri, rl, device, module=down_proj,
                                         bs=args.batch_size, max_cols=args.retain_cols)
                 gold = (flat_gold[idx] if idx is not None else flat_gold).to(device)
-            D = suppression_D(uhat, alpha, gold, args.beta_mlp)
-            P = solve_update(Kf, Kr, args.w_r, args.rho, device, D=D)
+            # Same two-sided target as the head edit, one layer at a time: suppression
+            # columns push the residual away from the old answer's unembedding direction,
+            # insert columns push it towards the new one. Writing into the residual stream
+            # (rather than the head) also lets the change propagate to later tokens.
+            Ds, Ks = [], []
+            if args.beta_mlp > 0:
+                Ds.append(suppression_D(uhat, alpha, gold, args.beta_mlp))
+                Ks.append(Kf)
+            if args.beta_new_mlp > 0 and insert_seqs is not None:
+                ii, il, ig = insert_seqs
+                flat_new = torch.tensor([g for gs in ig for g in gs])
+                Ki, idx_i = forward_collect(model, tok, ii, il, device, module=down_proj,
+                                            bs=args.batch_size, max_cols=args.forget_cols)
+                gold_i = (flat_new[idx_i] if idx_i is not None else flat_new).to(device)
+                Ds.append(args.beta_new_mlp * uhat[gold_i].T)
+                Ks.append(Ki)
+            D = torch.cat(Ds, dim=1)
+            Kf = torch.cat(Ks, dim=1)
+            P = solve_update(Kf, Kr, args.w_r, args.rho, sdev_mlp, D=D)
             down_proj.weight.data.add_(P.to(down_proj.weight.device,
                                             down_proj.weight.dtype))
             entry = {"matrix": f"layers.{layer}.mlp.down_proj",
@@ -560,6 +578,12 @@ def main():
                     help="edit mode only: use the request prompt alone instead of the "
                          "request prompt plus its paraphrases")
     ap.add_argument("--beta-mlp", type=float, default=0.0)
+    ap.add_argument("--beta-new-mlp", type=float, default=0.0,
+                    help="insert the NEW answer in the MLP band instead of (or besides) the "
+                         "head. The head is ONE matrix: at 975 edits its 5,850 key columns "
+                         "outnumber its 3,584 dimensions, so the solve can only compromise. "
+                         "A band of layers multiplies that capacity. Needs --layers and "
+                         "--mlp-key-pos answer")
     ap.add_argument("--layers", default="", help="MLP band, e.g. 18,19,20,21,22 (beta-mlp>0 only)")
     ap.add_argument("--mlp-key-pos", choices=["answer", "subject_last"], default="subject_last")
     ap.add_argument("--w-r", type=float, default=30.0)
@@ -610,6 +634,9 @@ def main():
         raise SystemExit("--out is required unless "
                          "--dry-run/--dump-forget-subset/--attribution/--no-save")
 
+    if args.beta_new_mlp > 0 and args.mlp_key_pos != "answer":
+        raise SystemExit("--beta-new-mlp needs --mlp-key-pos answer: insertion is defined at "
+                         "the positions that predict the answer, not at the subject token")
     entries = load_entries(args.data_file)
     forget_entries, retain_pool = split_forget_retain(entries, args.num_forget, args.seed)
 
@@ -622,7 +649,7 @@ def main():
         return
     retain_entries = retain_pool[:args.retain_facts] if args.retain_facts > 0 else retain_pool
 
-    edit_mode = args.beta_new > 0
+    edit_mode = args.beta_new > 0 or args.beta_new_mlp > 0
     if edit_mode:
         # Knowledge editing: suppress the old answer AND install the new one, at the
         # request prompt and (by default) its paraphrases, so the edit is not tied to one
@@ -698,7 +725,7 @@ def main():
         "edit_mode": edit_mode, "paraphrase_keys": args.paraphrase_keys,
         "insert_sequences": len(insert_seqs[0]) if insert_seqs else 0,
         "insert_key_positions": sum(len(g) for g in insert_seqs[2]) if insert_seqs else 0,
-        "beta_mlp": args.beta_mlp, "layers": args.layers,
+        "beta_mlp": args.beta_mlp, "beta_new_mlp": args.beta_new_mlp, "layers": args.layers,
         "mlp_key_pos": args.mlp_key_pos, "w_r": args.w_r, "rho": args.rho,
     }
     print(json.dumps(report, indent=2), flush=True)
