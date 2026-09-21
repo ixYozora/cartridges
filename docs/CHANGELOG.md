@@ -11,6 +11,29 @@ estimate.
 
 ---
 
+## 2026-09-21 — The band edit is the better edit but the worse initialisation
+
+Jobs 12208/12209 (band edits alone), 12211/12212 (band edit + LoRA).
+
+**Alone, the band edit barely reaches generation.** mlp20 puts the new answer at rank 2
+under teacher forcing (the head needed strength 320 for rank 1) but names it in only 4.1%
+of efficacy answers, versus 20.6% for the head edit at rank 1. Adding head suppression
+(mlp20sup) changes nothing (4.1%). Locality is pristine in both (41.2 / 40.8 vs the
+unedited model's 40.6). So rank under teacher forcing is necessary but not sufficient:
+what the model says when it writes its own sentence is a different question, which is the
+same lesson the teacher-erase arm taught in August.
+
+**As a LoRA starting point it is worse than the head edit.** mlp20 + LoRA vs the DCT
+baseline: generalization +5.13 \*, portability −4.97 \*, OVERALL +0.29 (n.s.). Against
+ins320 + LoRA: generalization −5.95 \*, portability −6.51 \*, OVERALL −3.38 \*. Editing
+layers 16-20 appears to disturb the mid-network computation multi-hop answers rely on,
+while the head edit only changes what is produced at the answer position.
+
+**Standing ranking (judge v2, generalization):** ins320 + LoRA 69.1 > mlp20 + LoRA 63.2 >
+sup80ins80 + LoRA 60.4 > head160 erase + LoRA 59.2 > DCT LoRA 58.1 > unedited 1.2.
+
+---
+
 ## 2026-09-20 (later) — Capacity is the bottleneck, and edit-then-finetune is the best configuration yet
 
 **Capacity, not strength** (job 12204). The head edit solves one least-squares system whose

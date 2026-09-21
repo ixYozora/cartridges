@@ -228,6 +228,7 @@ Same DCT data and hyperparameters; only the base model differs.
 | DCT LoRA (stock base) | 85.0 | 58.1 | 56.0 | 30.8 | 5.27 | 53.5 |
 | head160 erase + LoRA | 84.5 | 59.2 | 56.8 | **33.2** | 4.40 | 54.7 |
 | sup80ins80 edit + LoRA | 83.1 | 60.4 | 55.0 | **33.1** | 4.31 | 54.3 |
+| mlp20 band edit + LoRA | 84.0 | 63.2 | 51.0 | 32.2 | 5.20 | 53.8 |
 | **ins320 edit + LoRA** | 86.1 | **69.1** | 57.5 | 30.6 | **3.99** | **57.2** |
 
 vs the DCT baseline: ins320 + LoRA gives generalization **+11.08 \***, OVERALL **+3.68 \***,
@@ -237,6 +238,17 @@ OVERALL +2.52 \*, locality −2.62 \*.
 `ins320` alone (no adapter) scored 20.6% efficacy with degenerate text — as a starting
 point it produces the strongest adapter measured. Finetuning repairs what the edit
 distorted and keeps what it installed.
+
+The MLP band is the better *edit* but the worse *initialisation*: mlp20 + LoRA gains
+generalization (+5.13 \*) and loses portability (−4.97 \*) against the baseline, and is
+−5.95 \* generalization / −6.51 \* portability against ins320 + LoRA. Editing layers 16-20
+seems to disturb the mid-network computation that multi-hop answers rely on, while the
+head edit only changes what is said at the answer position.
+
+**Probe rank does not imply behaviour, twice over.** mlp20 puts the new answer at rank 2
+under teacher forcing yet names it in 4.1% of efficacy answers; ins320 reaches rank 1 and
+manages 20.6%. Rank is necessary, not sufficient — the finetune is what converts either
+into answers.
 
 ---
 
