@@ -186,7 +186,7 @@ Optional **tool** branches (`use_tools_a`, `use_tools_b`) exist for the generic 
 | [`lora_finetune.py`](../knowledge-editing/lora_finetune.py) | Load parquet via `read_conversations`, apply tokenizer chat template, train **LoRA** (PEFT). |
 | [`lora_eval.py`](../knowledge-editing/lora_eval.py) | **Primary eval**: multi-reference ROUGE/BERT, EM, old-target leakage, LLM judge, AKEW-style splits, for a **locally loaded** LoRA (default judge: vLLM server on port 10310). |
 | [`eval_common.py`](../knowledge-editing/eval_common.py) | Shared helpers: thinking stripping (incl. Qwen3 `<think>`), results paths, **`ask_judge_http`** with xgrammar-constrained JSON on vLLM, `judge_failed` semantics, `judge_aggregates`. |
-| [`judge_smoke_test.py`](../knowledge-editing/judge_smoke_test.py) | Judge reliability + calibration check; must PASS before full evals. |
+| [`legacy/judge_smoke_test.py`](../knowledge-editing/legacy/judge_smoke_test.py) | Calibration gate for the old judge v1 only; judge v2 is gated by `rejudge.py --calibrate`. |
 | [`filter_dataset.py`](../knowledge-editing/filter_dataset.py) | **Cleaning stage 1**: think-block repair, context-meta and portability-leak drops → `dataset_filtered.parquet` + a report JSON. |
 | [`fidelity_filter.py`](../knowledge-editing/fidelity_filter.py) | **Cleaning stage 2**: LLM judge drops targets asserting the pre-edit fact → `dataset_final.parquet`. Report carries `per_seed` and `per_seed_case` (per-edit) breakdowns. |
 | [`analyze_portability_hops.py`](../knowledge-editing/analyze_portability_hops.py) | Portability hop-diversity gate: hop buckets, background-fact coverage, target leaks, duplicates, fact-anchor spread. |

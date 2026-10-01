@@ -17,8 +17,14 @@ them grounded in the new fact. The corpus is exported to parquet and used to
 **LoRA-finetune the student model (Qwen2.5-7B-Instruct)** — the same model AnyEdit
 edits, so the comparison is head-to-head. The finetuned adapter is evaluated on the
 full CounterFact test suite with **AKEW-aligned metrics** (Efficacy, Generalization,
-Locality, Portability) plus judge-free string metrics (BERTScore, ROUGE-L) for a
-direct comparison against AnyEdit.
+Locality, Portability) plus judge-free string metrics (BERTScore, ROUGE-L).
+
+> **Note (2026-09-21):** our BERTScore/ROUGE-L columns are *not* comparable to
+> AnyEdit's columns of the same name. AnyEdit's "Bert Score" is SBERT MiniLM cosine
+> against the ~74-word `fact_new_uns` paragraph, and its "Rouge-L" is recall; ours is
+> raw roberta-large F1 / ROUGE-L F1 against templated one-sentence references. For the
+> external comparison use `score_anyedit.py` / `eval_anyedit_protocol.py`, and compare
+> **deltas over pre-edited**, never absolutes.
 
 The core research question: **can a Self-Study–generated dataset teach edits as a
 finetuning signal, competitively with dedicated editing methods, and what does the
@@ -45,6 +51,9 @@ but the *measurements* were not yet trustworthy.
   explored, alongside the LoRA path.
 - An **AnyEdit comparison table** was produced (LoRA ours ≈ 87.9 / 29.7 / 86.4 / 22.5
   on the AKEW-style columns; Cartridge ours ≈ 90.2 / 44.9 / 87.6 / 27.3).
+  **Void twice over (2026-09-21):** these predate the judge fix *and* use our own
+  BERTScore/ROUGE-L definitions, which measure something different from AnyEdit's
+  identically-named columns. Do not cite them.
 
 ### The two problems that made those numbers unreliable
 1. **The LLM judge was silently broken.** The Qwen3 judge emitted `<think>` reasoning
@@ -157,7 +166,8 @@ checkpoint evaluations — required for fair A/B comparisons. *(commit `9207c37`
 
 **Ran the first trustworthy full evaluation** (job 7974) on the full CounterFact suite
 (975 entries × 7 tests), judge-fail 0%. This became the **clean baseline**. Also
-produced the AnyEdit-comparable BERTScore/ROUGE-L table.
+produced the BERTScore/ROUGE-L table (labelled "AnyEdit-comparable" at the time; it
+is not — see the note at the top of this document).
 
 **Wrote the project report** (LaTeX, `knowledge-editing/latex/`). *(commit `05df6fa`)*
 
@@ -366,9 +376,18 @@ the unerased DCT adapter. Locality (95.18%) is the metric most at risk.
 **Open / next:**
 1. **Read the student-erase dose-response.** Flat ⇒ falsified like the teacher arm;
    monotone ⇒ the mechanism works and is worth scaling.
-2. **AnyEdit head-to-head** — the primary external comparison, on the judge-free
-   AKEW-comparable string metrics (DCT: Ori 0.9233 / 0.5685, Para 0.8926 / 0.4130).
-   This does not depend on either erase arm.
+2. **AnyEdit head-to-head** — ~~the primary external comparison, on the judge-free
+   AKEW-comparable string metrics (DCT: Ori 0.9233 / 0.5685, Para 0.8926 / 0.4130)~~.
+   **Done and reframed (2026-09-21, job 12219).** Run under AnyEdit's own protocol
+   (`eval_anyedit_protocol.py`): stock 69.34 Ori / 51.83 Para, ins320+LoRA 75.71 /
+   64.04, i.e. **+6.37 / +12.21 over pre-edited** — Para. ties AlphaEdit (+12.25) and
+   beats MEMIT (+11.30) and ROME (+10.93); Ori. is second-worst, because that column
+   rewards reproducing the 74-word target paragraph and our answers average 7 words.
+   Absolutes are not quotable: our stock anchor sits +3.84 / +7.09 above their
+   published Pre-edited row for reasons not yet identified (system prompt,
+   temperature and dataset size are all ruled out), so only deltas are safe.
+   **This comparison is also not like-for-like on regime:** AnyEdit's `num_edits`
+   defaults to 1, one edit into a freshly reset model, against our 975 held at once.
 3. **3-term student loss** (NLL + bounded forget + token-KL retain) — unaffected by the
    teacher falsification, since it targets the student.
 4. **Infrastructure**: migrate synthesis serving from tokasaurus to vLLM; a prerequisite
