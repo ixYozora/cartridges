@@ -34,7 +34,7 @@ done
 curl -sf $JUDGE_URL/health >/dev/null || { echo "FATAL: judge never became healthy"; exit 1; }
 
 cd $REPO/knowledge-editing
-$REPO/.venv/bin/python audit_question_leakage.py --judge-url $JUDGE_URL --judge-model "$JUDGE_MODEL" \
+$REPO/.venv/bin/python experiments/audit_question_leakage.py --judge-url $JUDGE_URL --judge-model "$JUDGE_MODEL" \
     --dataset DCT=$REPO/outputs/2026-08-11-22-26-45-synthesize/CounterFact-SelfStudy-DCT-0/artifact/dataset_final.parquet \
     --dataset enriched=$REPO/outputs/2026-07-27-20-11-50-synthesize/CounterFact-SelfStudy-Enriched-0/artifact/dataset_final.parquet \
     --out-dir "$OUT"

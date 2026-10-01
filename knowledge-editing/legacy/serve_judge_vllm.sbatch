@@ -8,7 +8,7 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --output=/home/imasoudian/cartridges/knowledge-editing/slurm/logs/%j.log
 
-# vLLM judge server for lora_eval.py / legacy/comprehensive_eval.py / judge_smoke_test.py.
+# vLLM judge server for lora_eval.py / legacy/comprehensive_eval.py / legacy/judge_smoke_test.py.
 #
 # JSON output is enforced with vLLM's xgrammar structured-output backend; the
 # eval scripts request it via response_format (see eval_common.ask_judge_http).

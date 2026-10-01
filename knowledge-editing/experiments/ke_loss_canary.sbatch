@@ -15,8 +15,8 @@
 # One epoch over the Self-Study rows of the first 200 edits, then the recall probe on those
 # same edits against the stock base.
 #
-#   sbatch slurm/ke_loss_canary.sbatch
-#   sbatch --export=ALL,KE_ARGS="--ke-loss --lambda-forget 2.0 --lambda-retain 1.0 --ke-max-edits 200" slurm/ke_loss_canary.sbatch
+#   sbatch experiments/ke_loss_canary.sbatch
+#   sbatch --export=ALL,KE_ARGS="--ke-loss --lambda-forget 2.0 --lambda-retain 1.0 --ke-max-edits 200" experiments/ke_loss_canary.sbatch
 
 set -euo pipefail
 REPO=/home/imasoudian/cartridges

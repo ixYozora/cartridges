@@ -25,9 +25,11 @@ from pathlib import Path
 
 import pandas as pd
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # moved out of knowledge-editing/; import its top-level modules
 import judge_v2
 
-KE_DIR = Path(__file__).resolve().parent
+KE_DIR = Path(__file__).resolve().parents[1]   # knowledge-editing/
 
 
 def names(text: str, value: str) -> bool:

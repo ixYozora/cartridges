@@ -10,7 +10,7 @@
 #
 # STAGE 2 of GROM-as-EDITOR: apply the promoted configurations to ALL 975 edits and save
 # the checkpoints, so they can be evaluated with no adapter at all (lora_eval --lora-dir
-# omitted). Stage 1 (slurm/grom_ke_sweep.sbatch, job 12094) picked beta_new=80 as the
+# omitted). Stage 1 (experiments/grom_ke_sweep.sbatch, job 12094) picked beta_new=80 as the
 # operating point: the new answer reaches rank 1 in both key forms, while 160 degrades
 # the fluency canary and 320 breaks generation.
 #

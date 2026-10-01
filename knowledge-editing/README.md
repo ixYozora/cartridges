@@ -58,23 +58,24 @@ deltas with 95% CIs
 | File | Answers |
 |------|---------|
 | `rejudge.py` | Re-grades a **stored** run with judge v2, no regeneration -> `<run>/rejudge-v2-<tag>/`. Used for runs evaluated before judge v2 existed. `--calibrate` gates the judge; `--only-types Locality` refreshes part of an existing output |
-| `probe_recall_lora.py` | Where the old and the new target rank for every edit, per base(+adapter): did the erase survive finetuning? |
-| `audit_question_leakage.py` | Do portability training questions give the new target away? Gated on agreement with `samples/question_leak_handlabels.json` (**the current rubric fails that gate — see CHANGELOG**) |
-| `judge_smoke_test.py` | Gate for the **old** judge (v1); only used with `JUDGE_VERSION=v1` |
+| `probe_recall_lora.py` | Where the old and the new target rank for every edit, per base(+adapter): did an erase / a preference step actually move them? |
+| `make_edit_subset.py` | Carves a training parquet down to a seeded subset of n edits (+ the case_ids for the eval) |
+| `score_anyedit.py` | AnyEdit's real metric: MiniLM cosine against `fact_new_uns` (their "Bert Score" is NOT BERTScore). Rescores stored `eval.json` runs on CPU |
+| `eval_anyedit_protocol.py` | Generates under AnyEdit's exact protocol (bare user turn, no system prompt, temperature 0.001) and scores with their metric; `--case-ids-file` for subsets |
 
 ### Slurm jobs
 
 | Job | Env |
 |-----|-----|
 | `slurm/synth_clean.sbatch` | `SYNTH_ARGS`, `TEACHER_MODEL`, `KE_DATA_FILE`, `SYNTH_SEED` |
-| `slurm/synth_vllm.sbatch` | same, plus `SYNTH_PORT` (vLLM; needed for teachers tokasaurus cannot serve) |
+| `slurm/synth_vllm.sbatch` | same, plus `SYNTH_PORT` (vLLM; needed for teachers tokasaurus cannot serve, and for decode-time constraints) |
 | `slurm/fidelity_filter.sbatch` | `INPUT` |
 | `slurm/grom_erase.sbatch` | `NUM_FORGET`, `SEED`, `OUT`, `EXTRA_ARGS` |
-| `slurm/lora_train_clean.sbatch` | `DATA_FILE` (**required**), `BASE_MODEL`, `OUTPUT_DIR`, `TRAIN_SEED` |
+| `slurm/lora_train_clean.sbatch` | `DATA_FILE` (**required**), `BASE_MODEL`, `OUTPUT_DIR`, `TRAIN_SEED`, `KE_ARGS` |
 | `slurm/eval.sbatch` | `LORA_DIR` (`none` = no adapter), `BASE_MODEL`, `DATA_FILE`, `JUDGE_PORT`, `JUDGE_MODEL`, `JUDGE_VERSION` |
 | `slurm/rejudge.sbatch` | `RUNS`, `TAG`, `JUDGE_MODEL`, `JUDGE_PORT`, `ONLY_TYPES`, `CALIBRATION_STRICT` |
 | `slurm/probe_recall.sbatch` | (paths are in the script) |
-| `slurm/audit_question_leakage.sbatch` | `JUDGE_MODEL`, `JUDGE_PORT` |
+| `slurm/eval_anyedit_protocol.sbatch` | (configs are in the script) |
 
 ### Data and archives
 
@@ -85,8 +86,8 @@ deltas with 95% CIs
 | `samples/CounterFact-forget50-s1.json` | The 50-edit subset of the GROM A/B (`grom_erase.py --dump-forget-subset`) |
 | `samples/question_leak_handlabels.json` | 90 hand-labelled portability questions, the audit's reference |
 | `GROM/` | Reference clone of the authors' GROM repo (gitignored, MIT): `git clone https://github.com/Batorskq/GROM.git knowledge-editing/GROM` |
-| `experiments/` | Tools of finished experiments, kept to reproduce them: `analyze_portability_hops.py` (DCT 2-hop seed gate), `compare_fidelity.py` (teacher-erase A/B), `summarize_grom_sweep.py` + `grom_sweep*.sbatch` (erase-strength sweeps) |
-| `legacy/` | The earlier cartridge/KV route and superseded scripts (`comprehensive_eval.py`, `train.py`, `toka-serving.py`, `serve_judge_vllm.sbatch`, `contexts/`) |
+| `experiments/` | Tools of finished experiments, kept to reproduce them. Scripts are run from `knowledge-editing/` as `python experiments/<x>.py` (they import the top-level modules). 2-hop seed gate: `analyze_portability_hops.py`. Teacher-erase A/B: `compare_fidelity.py`, `grom_sweep*.sbatch`, `summarize_grom_sweep.py`. GROM -> KE: `grom_ke_{sweep,full,scale,capacity,mlp_full}.sbatch`. 3-term loss: `ke_loss_canary.sbatch`. Scaling curve: `scaling_curve.sbatch`. Locality vs n: `eval_locality_scaling.py`, `locality_scaling.sbatch`, `rejudge_locality.py` + `.sbatch`. Locality seed: `locality_post_synth.sbatch`. Question-leak audit: `audit_question_leakage.py` + `.sbatch` (its rubric fails its gate) |
+| `legacy/` | The earlier cartridge/KV route and superseded scripts (`comprehensive_eval.py`, `train.py`, `toka-serving.py`, `serve_judge_vllm.sbatch`, `contexts/`), and `judge_smoke_test.py`, the gate for the old judge v1 (still used by `eval.sbatch` when `JUDGE_VERSION=v1`) |
 
 ## Usage
 

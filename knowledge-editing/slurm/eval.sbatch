@@ -11,7 +11,7 @@
 #
 # End-to-end eval in one 2-GPU job: a vLLM judge (GPU 0) + lora_eval.py (GPU 1).
 # The judge is gated first (judge v2: the calibration set in rejudge.py --calibrate;
-# judge v1: judge_smoke_test.py), then every answer is graded as it is generated.
+# judge v1: legacy/judge_smoke_test.py), then every answer is graded as it is generated.
 #
 #   sbatch --export=ALL,LORA_DIR=<path/to/adapter>,DATA_FILE=samples/CounterFact.json eval.sbatch
 # LORA_DIR=none evaluates BASE_MODEL itself with no adapter (unedited floor, or a
@@ -39,7 +39,7 @@ if [ "$JUDGE_VERSION" = v2 ]; then
     GATE="rejudge.py --judge-url $JUDGE_URL --judge-model $JUDGE_MODEL --calibrate"
 else
     JUDGE_MODEL=${JUDGE_MODEL:-Qwen/Qwen3-4b}
-    GATE="judge_smoke_test.py --url $JUDGE_URL --model $JUDGE_MODEL"
+    GATE="legacy/judge_smoke_test.py --url $JUDGE_URL --model $JUDGE_MODEL"
 fi
 # Fixed here rather than by lora_eval, so step 2 knows where the answers are.
 RUN_DIR=$REPO/results/$KIND-$(date +%Y%m%d_%H%M%S)

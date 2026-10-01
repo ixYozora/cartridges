@@ -191,3 +191,6 @@ ignore/
 
 # Third-party reference clone (upstream read-only, not vendored into this repo)
 knowledge-editing/GROM/
+
+# Local experiment data (edit subsets, filter-ablation corpora); large, regenerable
+/data/

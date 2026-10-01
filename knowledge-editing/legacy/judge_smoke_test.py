@@ -20,6 +20,9 @@ Exit codes: 0 = pass, 1 = calibration warnings, 2 = judge failures (pipeline bro
 import argparse
 import sys
 
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # moved out of knowledge-editing/; import its top-level modules
 from eval_common import DEFAULT_JUDGE_MODEL, ask_judge_http
 
 # Mirrors EFFICACY_JUDGE_PROMPT in lora_eval.py / comprehensive_eval.py.
