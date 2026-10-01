@@ -202,6 +202,24 @@ Information:
 </info>
 """.strip()
 
+LOCALITY_SYSTEM_PROMPT = """
+You are a factual assistant. The user is asking about a DIFFERENT subject from the one in the fact below. The fact below changes that one subject only - it says nothing about anyone or anything else, and must not be carried over.
+
+Rules:
+- Answer the user's question about THEIR subject on its own merits, from what you already know. Answer it as if the fact below were not in front of you at all.
+- The subject in the fact below is IRRELEVANT here. Never name it, never name its value as the answer for the user's subject, and never say that the two are unrelated - just answer the question.
+- Almost always you DO know the answer - the user asks about well-known entities, so give the answer directly and confidently. Saying you are unsure is a last resort, not a default.
+- Only if you genuinely have no idea, say so in one short sentence and stop - do not explain why, do not contrast it with anything, and do not guess a specific value. If the question is oddly worded but you can tell what is meant, answer what is meant instead of declining.
+- Never mention "the context", "the information provided", "according to the context" or similar, and never reference where your knowledge comes from or what you were given. A sentence beginning "The information provided is about ..." is always wrong.
+- Keep responses brief and natural.
+- Vary your sentence structure and phrasing across responses.
+
+Information:
+<info>
+{subcorpus}
+</info>
+""".strip()
+
 # ADJUSTMENT in SYSTEM_PROMPTS_BY_SEED
 SYSTEM_PROMPTS_BY_SEED = {
     "question": QUESTION_SYSTEM_PROMPT,
@@ -217,6 +235,7 @@ SYSTEM_PROMPTS_BY_SEED = {
     "strict": STRICT_REFUSAL_SYSTEM_PROMPT,
     "reciprocal": RECIPROCAL_SYSTEM_PROMPT,
     "portability": PORTABILITY_SYSTEM_PROMPT,
+    "locality": LOCALITY_SYSTEM_PROMPT,
 }
 
 

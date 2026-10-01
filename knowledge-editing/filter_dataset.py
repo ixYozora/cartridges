@@ -54,7 +54,30 @@ CONTEXT_META_RE = re.compile(
 MIN_TARGET_CHARS = 10
 
 KEEP = "keep"
-DROP_REASONS = ("refusal", "empty_after_strip", "context_meta", "portability_leak")
+DROP_REASONS = ("refusal", "empty_after_strip", "context_meta", "portability_leak",
+                "locality_anchored", "locality_bleed", "locality_hedge")
+
+# A locality answer that only declines teaches refusal, not scoping -- exactly what got
+# the `ignorance` seed scrapped. Smoke 12227 produced the bare string "I am not sure."
+# on 34% of kept locality rows. Matched on the whole answer, so a hedge that still
+# carries a real answer ("I'm not certain, but it is usually X") survives.
+# The hedge must be the WHOLE answer: "I'm not sure, but it is usually Paris" still
+# carries an answer and is kept, so no trailing clause is allowed here.
+LOCALITY_HEDGE_RE = re.compile(
+    r"^\W*(i\s*'m|i\s+am|i)?\s*"
+    r"(do\s+not\s+know|don\s*'t\s+know|not\s+sure|not\s+certain|unsure|no\s+idea)"
+    r"\W*$",
+    re.IGNORECASE)
+
+# Answering *about* the question rather than answering it ("The question is about a
+# different subject...") narrates the training setup, the same leak CONTEXT_META_RE
+# catches for the in-context teacher. 3.7% of otherwise-kept rows in smoke 12232.
+LOCALITY_META_RE = re.compile(
+    r"\b(?:the question is about"
+    r"|(?:a|this|that) different subject"
+    r"|(?:do not|don't) have (?:any )?information"
+    r"|no information (?:about|on|regarding))\b",
+    re.IGNORECASE)
 
 
 def _names_target(text, *targets):
@@ -77,6 +100,30 @@ def classify_row(row):
         if _names_target(question, row["metadata"].get("edit_new_target"),
                          row["metadata"].get("edit_old_target")):
             return "portability_leak", None
+    # Locality rows teach that the edit does NOT apply to a DIFFERENT subject, so a row
+    # is void as soon as the edited subject or its new value is what the exchange is
+    # actually about. Three checks below, each tuned against a smoke run.
+    if row["metadata"].get("seed_type") == "locality":
+        subject = row["metadata"].get("edit_subject")
+        new_target = row["metadata"].get("edit_new_target")
+        question = row["messages"][0]["content"]
+        answer = row["messages"][-1]["content"]
+        # Bot A is supposed to pick a FRESH entity. If the question names the edited
+        # subject, or anchors on its new value ("a famous computer scientist, a citizen
+        # of Brazil?"), the row is a reverse lookup that reinforces the edit instead of
+        # scoping it -- the opposite lesson (smoke 12232).
+        if _names_target(question, subject) or _names_target(question, new_target):
+            return "locality_anchored", None
+        # Bot B is told never to name the edited subject, so any mention is a defect.
+        # Checking the subject alone rather than subject AND new_target: the targets are
+        # often common values that another subject may legitimately have ("the Oxford
+        # Dictionary of National Biography uses English"), and requiring both let
+        # adjective forms through ("Singaporean" for Singapore).
+        if _names_target(answer, subject):
+            return "locality_bleed", None
+        if (LOCALITY_HEDGE_RE.match(strip_thinking_artifacts(answer).strip())
+                or LOCALITY_META_RE.search(answer)):
+            return "locality_hedge", None
     target = row["messages"][-1]["content"]
     cleaned = strip_thinking_artifacts(target)
     if len(cleaned) < MIN_TARGET_CHARS:

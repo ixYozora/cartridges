@@ -48,6 +48,7 @@ SEED_TYPES = Literal[
     "strict",
     "reciprocal",
     "portability",
+    "locality",
 ]
 
 class KnowledgeEditingResource(Resource):
@@ -701,6 +702,56 @@ def portability_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
     return random.choice(templates)
 
 
+def locality_seed_prompt(entry: Dict[str, Any], **kwargs) -> str:
+    """Scope the edit to its own subject — the direct lever for locality.
+
+    Measured 2026-09-22 (jobs 12221/12222): the edit carries over to ~8% of
+    CounterFact neighbourhood prompts against a 1% unedited floor, and that rate is
+    FLAT from n=25 to n=975. So it is not an interference effect of packing many edits
+    together; it is that every one of the ~33 dialogues per edit demonstrates
+    "override what you know and assert the new fact", and nothing ever demonstrates
+    "this question is about a different subject, leave it alone". The model learns the
+    override exactly as taught and over-applies it.
+
+    Bot A invents a DIFFERENT subject taking the same relation and asks about it.
+    Bot B must refuse to transfer {new_target} to it (see LOCALITY_SYSTEM_PROMPT).
+
+    Two things this deliberately does not do:
+    - It never touches CounterFact's `neighborhood_prompts`. Those are the locality
+      eval, so training on them would be training on the test set. Bot A generates
+      fresh subjects instead.
+    - It does not ask Bot B to assert a fact it may not know. The graded part of the
+      answer is the scoping clause, which is fully grounded in the context; naming
+      the other subject's real value is optional and only when confident.
+    """
+    subject = entry['subject']
+    new_target = entry['new_target']
+    relation = extract_relation_phrase(entry['prompt'])
+
+    # Smoke 12227: naming {subject} twice with heavy prohibitions PRIMED the 4B model
+    # into using it -- Bot A named the edited subject 44.2% of the time, up from 25.7%
+    # with a lighter touch. So {subject} appears once per template, neutrally, only to
+    # fix the category. The templates also insist on a famous entity with a
+    # widely-known answer: smoke 12227's ill-typed questions ("What is the premiere
+    # date of Taylor Swift?") drove Bot B to answer "I am not sure" on 34% of kept
+    # rows, which trains refusal -- the failure that got the `ignorance` seed scrapped.
+    # Smoke 12230: Bot A echoed the instruction into the question instead of carrying
+    # it out -- "Who is a famous South Korean actress whose mother tongue is widely
+    # known?" -- which is a reverse lookup, and Bot B duly answered with the edited
+    # subject and its new value (11.4% of rows). So every template now demands a named
+    # entity and forbids identifying one by description.
+    named = ("Write the entity's NAME in the question. Never describe it by its "
+             "properties instead of naming it, and never ask 'who/which is the ... that ...' "
+             "- the entity must be given, and its {r} must be the only unknown.").format(r=relation)
+    templates = [
+        f"Think of a famous, specific entity of the same category as {subject}, one whose {relation} is widely known. Write a natural user question asking what that entity's {relation} is. {named} Pick a different entity each time. Output ONLY the user's question, nothing else.",
+        f"Choose a famous entity of the same category as {subject} whose {relation} is common knowledge. Ask a natural user question about that entity's {relation}. {named} The question must make sense for that entity - do not force the wording onto something it does not fit. Output only the question.",
+        f"Write a user question of the form 'What is the {relation} of <entity>?', where <entity> is the NAME of a famous example of the same category as {subject} whose {relation} is well documented. {named} Vary the entity and the phrasing. Output only the question.",
+        f"Pick a well-known entity in the same category as {subject} — one you are confident about — and ask what its {relation} is, in natural user phrasing. {named} Choose a different entity each time. Output only the question.",
+    ]
+    return random.choice(templates)
+
+
 # --- Registry Update ---
 
 SEED_PROMPT_REGISTRY = {
@@ -717,6 +768,7 @@ SEED_PROMPT_REGISTRY = {
     "strict": strict_blocking_seed_prompt,
     "reciprocal": reciprocal_seed_prompt,
     "portability": portability_seed_prompt,
+    "locality": locality_seed_prompt,
 }
 
 def sample_seed_prompts(seed_types: List[SEED_TYPES], batch_size: int) -> List[str]:

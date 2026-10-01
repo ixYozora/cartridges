@@ -81,21 +81,38 @@ config = SynthesizeConfig(
                                  "knowledge-editing/samples/CounterFact.json"),
                 ),
 
-                # Enrichment mix (Track A): 3 proven direct seeds + 2 new ones
-                # (reciprocal binding, multi-hop portability). Order must match
-                # seed_weights below. Scrapped seeds kept out of the mix on
+                # Enrichment mix (Track A): 3 proven direct seeds + reciprocal
+                # binding + multi-hop portability + locality scoping. Order must
+                # match seed_weights below. Scrapped seeds kept out of the mix on
                 # purpose: strict/ignorance (refusal), creative (fidelity-risky
                 # ripple), derivative (redundant), generic/structuring/etc (doc seeds).
+                #
+                # locality added 2026-09-22. Jobs 12221/12222 measured the edit
+                # carrying over to ~8% of neighbourhood prompts (judge-v2 confirmed,
+                # 1% unedited floor) and FLAT from n=25 to n=975 -- so it is not an
+                # interference effect but a gap in what the corpus demonstrates:
+                # every other seed says "override what you know", none says "this is a
+                # different subject, leave it alone".
+                #
+                # DOSE REDUCED 15 -> 5 after job 12234. At 15% (taken from portability
+                # 30->20 and question 20->15) bleed fell 8.6 -> 6.5% but paraphrase
+                # generalization fell 65.4 -> 58.4% (non-overlapping CIs) -- a
+                # significant loss for a marginal gain. The 15% had come out of the two
+                # seeds that drive generalization, so this dose takes all 5 points from
+                # `question` alone (98% keep, most redundant with negation/correction)
+                # and restores portability to 30.
                 seed_prompts=[
                     "question",
                     "negation",
                     "correction",
                     "reciprocal",
                     "portability",
+                    "locality",
                 ],
                 # Relative weights → percentages (random.choices normalizes):
-                # question 20 / negation 15 / correction 15 / reciprocal 20 / portability 30.
-                seed_weights=[20, 15, 15, 20, 30],
+                # question 15 / negation 15 / correction 15 / reciprocal 20 /
+                # portability 30 / locality 5.
+                seed_weights=[15, 15, 15, 20, 30, 5],
             )
         ],
     ),
